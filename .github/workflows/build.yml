@@ -1002,14 +1002,16 @@ jobs:
                 { print }
               ' drivers/misc/Kconfig > drivers/misc/Kconfig.ntsync &&
                 mv drivers/misc/Kconfig.ntsync drivers/misc/Kconfig
+            else
+              # 已存在但被标 BROKEN（6.12 主线）时摘掉依赖，否则该符号永远不可见。
+              ntsync_strip_broken
             fi
 
             if ! grep -Fq 'obj-$(CONFIG_NTSYNC)' drivers/misc/Makefile; then
               printf 'obj-$(CONFIG_NTSYNC)\t\t+= ntsync.o\n' >> drivers/misc/Makefile
             fi
 
-            grep -q '^config NTSYNC$' drivers/misc/Kconfig &&
-              grep -Fq 'obj-$(CONFIG_NTSYNC)' drivers/misc/Makefile
+            ntsync_wired
           }
 
           # lockdep 兼容层：v5.13 才引入 lockdep_assert()/LOCK_STATE_*。
@@ -1029,6 +1031,38 @@ jobs:
               grep -q 'LOCK_STATE_NOT_HELD' include/linux/lockdep.h
           }
 
+          # 6.12 主线已带 NTSYNC 源码，但 Kconfig 里标了 depends on BROKEN，
+          # 此时不能算「已集成」，否则 defconfig 的 CONFIG_NTSYNC=y 会被 Kconfig 丢弃。
+          ntsync_kconfig_block() {
+            awk '
+              /^config NTSYNC$/ { inblk = 1; print; next }
+              inblk && /^(config |menuconfig |endmenu|source |menu )/ { exit }
+              inblk { print }
+            ' drivers/misc/Kconfig
+          }
+
+          ntsync_kconfig_wired() {
+            grep -q '^config NTSYNC$' drivers/misc/Kconfig &&
+              ! ntsync_kconfig_block |
+                grep -q '^[[:space:]]*depends on[[:space:]]*BROKEN[[:space:]]*$'
+          }
+
+          ntsync_strip_broken() {
+            grep -q '^config NTSYNC$' drivers/misc/Kconfig || return 0
+            awk '
+              /^config NTSYNC$/ { inblk = 1; print; next }
+              inblk && /^(config |menuconfig |endmenu|source |menu )/ { inblk = 0 }
+              inblk && /^[[:space:]]*depends on[[:space:]]*BROKEN[[:space:]]*$/ { next }
+              { print }
+            ' drivers/misc/Kconfig > drivers/misc/Kconfig.ntsync &&
+              mv drivers/misc/Kconfig.ntsync drivers/misc/Kconfig
+          }
+
+          ntsync_wired() {
+            ntsync_kconfig_wired &&
+              grep -Fq 'obj-$(CONFIG_NTSYNC)' drivers/misc/Makefile
+          }
+
           if [[ -f drivers/misc/ntsync.c && -f include/uapi/linux/ntsync.h ]]; then
             echo "NTSync 源码已存在（主线自带），跳过基础补丁"
           elif [[ ! -e drivers/misc/ntsync.c && ! -e include/uapi/linux/ntsync.h ]]; then
@@ -1040,24 +1074,21 @@ jobs:
             ntsync_fail "NTSync 源码不完整（驱动与 uapi 头文件不匹配）"
           fi
 
-          # 平台补丁：Kconfig/Makefile 与 lockdep API 均已就位时跳过。
-          if ntsync_has_lockdep_api && grep -q '^config NTSYNC$' drivers/misc/Kconfig; then
+          # 平台补丁：源码、Kconfig/Makefile 接线、lockdep API 三者齐备才算已集成。
+          if ntsync_wired && ntsync_has_lockdep_api; then
             echo "NTSync 已集成，跳过平台补丁"
-          elif ntsync_has_lockdep_api; then
-            echo "内核已提供 lockdep_assert()/LOCK_STATE_*，仅补齐 Kconfig/Makefile 接线"
-            ntsync_wire_misc || ntsync_fail "NTSync 平台接线写入失败"
           else
             wget -q "${NTSYNC_PATCH_URL}/${NTSYNC_PATCH}.patch" ||
               ntsync_fail "NTSync 平台补丁 ${NTSYNC_PATCH}.patch 下载失败"
 
             # 先 dry-run：补丁一旦部分应用（lockdep.c 改了、lockdep.h 没改）内核就无法编译，
-            # 因此只在能完整应用时才真正落盘，否则整体走本地兼容层。
+            # 因此只在能完整应用时才真正落盘，否则整体走本地接线/兼容层。
             if patch --batch --forward --dry-run -p1 < "${NTSYNC_PATCH}.patch" > /tmp/ntsync_platform.log 2>&1; then
               echo "上游平台补丁可完整应用，开始应用（含 lockdep 回移）"
               patch --batch --forward -p1 < "${NTSYNC_PATCH}.patch" ||
                 ntsync_fail "NTSync 平台补丁应用失败（可能不兼容当前内核）"
             else
-              echo "::notice title=NTSync 兼容层::上游平台补丁上下文不匹配，已改用本地 lockdep 兼容层（功能等价）"
+              echo "::notice title=NTSync 兼容层::上游平台补丁上下文不匹配，改用本地接线（功能等价）"
               sed -n '1,30p' /tmp/ntsync_platform.log
               EXTRA_FILES=$(grep '^diff --git' "${NTSYNC_PATCH}.patch" |
                 grep -v 'drivers/misc/Kconfig' | grep -v 'drivers/misc/Makefile' |
@@ -1066,13 +1097,20 @@ jobs:
                 echo "::warning title=NTSync 兼容层::平台补丁还包含未适配的改动，已跳过：$EXTRA_FILES"
               fi
               ntsync_wire_misc || ntsync_fail "NTSync 平台接线写入失败"
-              ntsync_inject_lockdep_compat || ntsync_fail "NTSync lockdep 兼容层注入失败"
-              if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-                echo "" >> "$GITHUB_STEP_SUMMARY"
-                echo "> 🔧 **NTSync**：上游平台补丁与本内核上下文不匹配，已启用本地 lockdep 兼容层（功能等价，构建继续）" >> "$GITHUB_STEP_SUMMARY"
+              if ntsync_has_lockdep_api; then
+                echo "内核已提供 lockdep_assert()/LOCK_STATE_*，无需 lockdep 兼容层"
+              else
+                ntsync_inject_lockdep_compat || ntsync_fail "NTSync lockdep 兼容层注入失败"
+                if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+                  echo "" >> "$GITHUB_STEP_SUMMARY"
+                  echo "> 🔧 **NTSync**：上游平台补丁与本内核上下文不匹配，已启用本地 lockdep 兼容层（功能等价，构建继续）" >> "$GITHUB_STEP_SUMMARY"
+                fi
               fi
             fi
           fi
+
+          # 兜底：部分版本的平台补丁只改 Kconfig（如 6.12 仅摘 BROKEN），Makefile 接线需在此确保。
+          ntsync_wired || ntsync_wire_misc || ntsync_fail "NTSync 平台接线不完整（Kconfig/Makefile）"
 
           cd ..
 
