@@ -1396,11 +1396,20 @@ jobs:
             if patch -p1 --dry-run --forward < "$BBR3_PATCH" >/dev/null 2>&1; then
               patch -p1 --no-backup-if-mismatch < "$BBR3_PATCH"
               echo "[+] BBRv3 补丁已应用"
+            elif patch -p1 --dry-run --forward -F 3 < "$BBR3_PATCH" >/dev/null 2>&1; then
+              # LTS 分支会持续合入上游 stable 提交（如 sysctl_net_ipv4.c 的
+              # tcp_min_rcvbuf），补丁的上下文行随之漂移。fuzz 3 只放宽上下文
+              # 匹配，hunk 内容仍须原样落位，可安全吸收这类偏移。
+              patch -p1 --no-backup-if-mismatch -F 3 < "$BBR3_PATCH"
+              echo "[+] BBRv3 补丁已应用（LTS 上下文漂移，fuzz 3）"
             elif grep -q '^config TCP_CONG_BBR3' net/ipv4/Kconfig; then
               echo "[*] BBRv3 补丁此前已应用，跳过"
             else
               net_fail "BBRv3 补丁应用失败（${AVER}-${KVER}）"
             fi
+            # 防止 fuzz 应用时漏掉新增文件/配置项后继续编译
+            [ -f net/ipv4/tcp_bbr3.c ] || net_fail "BBRv3 补丁应用后缺少 net/ipv4/tcp_bbr3.c"
+            grep -q '^config TCP_CONG_BBR3' net/ipv4/Kconfig || net_fail "BBRv3 补丁应用后缺少 TCP_CONG_BBR3 配置项"
           else
             echo "[*] ${AVER}-${KVER} 无 BBRv3 backport，使用 BBR v1"
           fi
