@@ -971,3 +971,105 @@ susfs_def_kstatfs_fwd_compat() {
   echo "SUSFS susfs_def.h 兼容：已补上"
 }
 susfs_def_kstatfs_fwd_compat
+
+# ---- priority uid filter 的两个 helper 只被该特性的守卫块使用（2026-11-01 重构）----
+# 2026-11-01 的 SUSFS 重构（268fba59e）把 priority uid filter 变成 config 门控特性：
+# 整块代码（含全部调用点）包进 `#ifdef CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER`，但
+#   static struct cred *susfs_switch_to_ksu_domain(void)    （约 183 行）
+#   static void susfs_restore_creds(struct cred *orig_cred) （约 217 行）
+# 两个 helper 的定义留在守卫外。该符号只声明在 SUSFS 自带的 KernelSU 侧补丁
+# （kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch，default y）里，而这里用的是
+# 各 KSU 变体自带的 Kconfig —— 未声明该符号时守卫恒假、特性块被编掉，两个 helper
+# 成为 unused static function，clang 以 -Werror,-Wunused-function 报错、fs/susfs.o 失败
+# （android15-6.6-118 + FinaSU，2026-11-02 实测 exit 2）。内核文件侧的调用点
+# （block/ioprio.c、kernel/sys.c）都在同一守卫内，包上即与上游不变量一致。
+# 判据只看产物本身：① susfs.c 里有该守卫块；② 树里的 KernelSU Kconfig 没有声明该
+# 符号；③ 两个 helper 在守卫块外没有任何其他引用 —— 三条同时成立才动手。没有守卫块、
+# 已声明符号、定义已在守卫内（幂等）都跳过；块外还有引用或布局不符则告警跳过、不改。
+susfs_priority_uid_guard_state() {
+  # 守卫块结构判定（只看代码本身，注释不参与），退出码即结论：
+  #   0 需要包裹 / 10 布局不符 / 11 定义已在守卫块内 / 12 守卫块外仍有引用
+  perl -0777 -ne '
+    my @L = split /\n/;
+    my ($s, $e, $d) = (-1, -1, 0);
+    for my $i (0 .. $#L) {
+      (my $l = $L[$i]) =~ s/\r$//;
+      if ($s < 0) {
+        if ($l =~ /^#\s*ifdef\s+CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER\b/) { $s = $i; $d = 1 }
+        next;
+      }
+      if ($l =~ /^#\s*if/)    { $d++; next }
+      if ($l =~ /^#\s*endif/) { $d--; if (!$d) { $e = $i; last } }
+    }
+    exit 10 if $s < 0 || $e < 0;
+    my $t = $_;
+    $t =~ s{/\*.*?\*/}{ my $c = $&; $c =~ s/[^\n]//g; $c }ges;  # 块注释只留换行
+    $t =~ s{//[^\n]*}{}g;                                        # 行注释整段去掉
+    my @C = split /\n/, $t;
+    my (@def, @outside);
+    for my $j (0 .. $#C) {
+      next unless $C[$j] =~ /susfs_switch_to_ksu_domain|susfs_restore_creds/;
+      if ($L[$j] =~ /^static\s+struct\s+cred\s*\*\s*susfs_switch_to_ksu_domain\s*\(/) { push @def, $j; next }
+      if ($L[$j] =~ /^static\s+void\s+susfs_restore_creds\s*\(/) { push @def, $j; next }
+      push @outside, $j if $j < $s || $j > $e;
+    }
+    exit 10 unless @def == 2;
+    exit 11 if grep { $_ > $s && $_ < $e } @def;
+    exit 12 if @outside;
+    exit 0;
+  ' "$1"
+}
+susfs_priority_uid_filter_guard_compat() {
+  local f="$KERNEL_ROOT/common/fs/susfs.c"
+  if [ ! -f "$f" ]; then
+    echo "SUSFS priority uid filter 守卫步骤：未找到 fs/susfs.c，跳过"
+    return 0
+  fi
+  if ! grep -q '^#ifdef CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER' "$f"; then
+    echo "SUSFS priority uid filter 守卫步骤：无该守卫块（重构前版本），跳过"
+    return 0
+  fi
+  local kconf found=""
+  for kconf in "$KERNEL_ROOT/KernelSU/kernel/Kconfig" \
+              "$KERNEL_ROOT/common/drivers/kernelsu/Kconfig"; do
+    if [ -f "$kconf" ] \
+      && grep -qE '^[[:space:]]*config[[:space:]]+KSU_SUSFS_PRIORITY_UID_FILTER([[:space:]]|$)' "$kconf"; then
+      found="$kconf"
+      break
+    fi
+  done
+  if [ -n "$found" ]; then
+    echo "SUSFS priority uid filter 守卫步骤：Kconfig 已声明该符号，跳过"
+    return 0
+  fi
+  local st=0
+  susfs_priority_uid_guard_state "$f" || st=$?
+  case "$st" in
+    11) echo "SUSFS priority uid filter 守卫步骤：helper 定义已在守卫块内，跳过"; return 0 ;;
+    12) echo "::warning title=priority uid filter 守卫::守卫块外仍有 helper 引用，跳过不改（需人工确认）"; return 0 ;;
+    10) echo "::warning title=priority uid filter 守卫::susfs.c 里没找到预期的两个 helper 定义，跳过不改"; return 0 ;;
+    0)  : ;;
+    *)  echo "::warning title=priority uid filter 守卫::结构判定失败（rc=$st），跳过不改"; return 0 ;;
+  esac
+  local before_if after_if
+  before_if=$(grep -cE '^#ifdef CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER\r?$' "$f" || true)
+  echo "SUSFS priority uid filter 守卫步骤：把两个 helper 定义包进同一守卫"
+  perl -0777 -i -pe '
+    my $nl = /\r\n/ ? "\r\n" : "\n";
+    my $n = ($_ =~ s{^(static\s+struct\s+cred\s*\*\s*susfs_switch_to_ksu_domain\s*\(\s*void\s*\)\s*\{.*?^static\s+void\s+susfs_restore_creds\s*\(.*?\n\})}{#ifdef CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER$nl$1$nl#endif // #ifdef CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER}ms);
+    die "priority uid filter helper 段落匹配失败（n=$n）\n" unless $n == 1;
+  ' "$f" || { echo "::error::包裹 priority uid filter helper 失败" >&2; exit 1; }
+  after_if=$(grep -cE '^#ifdef CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER\r?$' "$f" || true)
+  if [ "$after_if" -ne $((before_if + 1)) ]; then
+    echo "::error::priority uid filter 守卫计数不符（$before_if → $after_if）" >&2
+    exit 1
+  fi
+  st=0
+  susfs_priority_uid_guard_state "$f" || st=$?
+  if [ "$st" -ne 11 ]; then
+    echo "::error::包裹后结构复判未通过（rc=$st）" >&2
+    exit 1
+  fi
+  echo "SUSFS priority uid filter 守卫步骤：已包裹"
+}
+susfs_priority_uid_filter_guard_compat
