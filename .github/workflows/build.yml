@@ -975,19 +975,103 @@ jobs:
             exit 1
           }
 
-          echo "自动选择 NTSync 补丁: ${NTSYNC_PATCH}.patch"
-          if ! wget -q "https://raw.githubusercontent.com/Goldzxcbug/Droidspaces_Kernel_patch/refs/heads/main/NTsync/ntsync_base.patch"; then
-            ntsync_fail "NTSync 基础补丁下载失败"
-          fi
-          if ! wget -q "https://raw.githubusercontent.com/Goldzxcbug/Droidspaces_Kernel_patch/refs/heads/main/NTsync/${NTSYNC_PATCH}.patch"; then
-            ntsync_fail "NTSync 平台补丁 ${NTSYNC_PATCH}.patch 下载失败"
+          NTSYNC_PATCH_URL="https://raw.githubusercontent.com/Goldzxcbug/Droidspaces_Kernel_patch/refs/heads/main/NTsync"
+          NTSYNC_COMPAT_HEADER="$GITHUB_WORKSPACE/scripts/ntsync_compat/ntsync_lockdep_compat.h"
+
+          # 平台接线：Kconfig/Makefile 直接幂等写入。
+          # 上游平台补丁把「接线」和「lockdep 回移」混在一个 patch 里，任一上下文漂移都会让整步失败；
+          # 接线本身只有两行，独立写入后不再受上游补丁上下文影响。
+          ntsync_wire_misc() {
+            if ! grep -q '^config NTSYNC$' drivers/misc/Kconfig; then
+              awk '
+                !done && /^endmenu$/ {
+                  print "config NTSYNC"
+                  print "\ttristate \"NT synchronization primitive emulation\""
+                  print "\tdefault\tm"
+                  print "\thelp"
+                  print "\t  This module provides kernel support for emulation of Windows NT"
+                  print "\t  synchronization primitives. It is not a hardware driver."
+                  print ""
+                  print "\t  To compile this driver as a module, choose M here: the"
+                  print "\t  module will be called ntsync."
+                  print ""
+                  print "\t  If unsure, say N."
+                  print ""
+                  done = 1
+                }
+                { print }
+              ' drivers/misc/Kconfig > drivers/misc/Kconfig.ntsync &&
+                mv drivers/misc/Kconfig.ntsync drivers/misc/Kconfig
+            fi
+
+            if ! grep -Fq 'obj-$(CONFIG_NTSYNC)' drivers/misc/Makefile; then
+              printf 'obj-$(CONFIG_NTSYNC)\t\t+= ntsync.o\n' >> drivers/misc/Makefile
+            fi
+
+            grep -q '^config NTSYNC$' drivers/misc/Kconfig &&
+              grep -Fq 'obj-$(CONFIG_NTSYNC)' drivers/misc/Makefile
+          }
+
+          # lockdep 兼容层：v5.13 才引入 lockdep_assert()/LOCK_STATE_*。
+          # 上游平台补丁的 include/linux/lockdep.h hunk 期望 lockdep_assert_none_held_once()（v5.13+），
+          # 在 5.10 上必然 reject，而 kernel/locking/lockdep.c 却会被改掉 —— 半应用的内核根本编译不过。
+          # 这里只补驱动实际用到的两个符号，不动内核 core locking 代码，语义与上游一致。
+          ntsync_inject_lockdep_compat() {
+            cp "$NTSYNC_COMPAT_HEADER" drivers/misc/ntsync_lockdep_compat.h
+            if ! grep -q 'ntsync_lockdep_compat.h' drivers/misc/ntsync.c; then
+              sed -i 's|^#define NTSYNC_NAME|#include "ntsync_lockdep_compat.h"\n\n#define NTSYNC_NAME|' drivers/misc/ntsync.c
+            fi
+            grep -q 'ntsync_lockdep_compat.h' drivers/misc/ntsync.c
+          }
+
+          ntsync_has_lockdep_api() {
+            grep -q 'define lockdep_assert(' include/linux/lockdep.h &&
+              grep -q 'LOCK_STATE_NOT_HELD' include/linux/lockdep.h
+          }
+
+          if [[ -f drivers/misc/ntsync.c && -f include/uapi/linux/ntsync.h ]]; then
+            echo "NTSync 源码已存在（主线自带），跳过基础补丁"
+          elif [[ ! -e drivers/misc/ntsync.c && ! -e include/uapi/linux/ntsync.h ]]; then
+            wget -q "${NTSYNC_PATCH_URL}/ntsync_base.patch" ||
+              ntsync_fail "NTSync 基础补丁下载失败"
+            patch --batch --forward -p1 < ntsync_base.patch ||
+              ntsync_fail "NTSync 基础补丁应用失败（可能不兼容当前内核）"
+          else
+            ntsync_fail "NTSync 源码不完整（驱动与 uapi 头文件不匹配）"
           fi
 
-          if ! patch -p1 < "ntsync_base.patch"; then
-            ntsync_fail "NTSync 基础补丁应用失败（可能不兼容当前内核）"
-          fi
-          if ! patch -p1 < "${NTSYNC_PATCH}.patch"; then
-            ntsync_fail "NTSync 平台补丁应用失败（可能不兼容当前内核）"
+          # 平台补丁：Kconfig/Makefile 与 lockdep API 均已就位时跳过。
+          if ntsync_has_lockdep_api && grep -q '^config NTSYNC$' drivers/misc/Kconfig; then
+            echo "NTSync 已集成，跳过平台补丁"
+          elif ntsync_has_lockdep_api; then
+            echo "内核已提供 lockdep_assert()/LOCK_STATE_*，仅补齐 Kconfig/Makefile 接线"
+            ntsync_wire_misc || ntsync_fail "NTSync 平台接线写入失败"
+          else
+            wget -q "${NTSYNC_PATCH_URL}/${NTSYNC_PATCH}.patch" ||
+              ntsync_fail "NTSync 平台补丁 ${NTSYNC_PATCH}.patch 下载失败"
+
+            # 先 dry-run：补丁一旦部分应用（lockdep.c 改了、lockdep.h 没改）内核就无法编译，
+            # 因此只在能完整应用时才真正落盘，否则整体走本地兼容层。
+            if patch --batch --forward --dry-run -p1 < "${NTSYNC_PATCH}.patch" > /tmp/ntsync_platform.log 2>&1; then
+              echo "上游平台补丁可完整应用，开始应用（含 lockdep 回移）"
+              patch --batch --forward -p1 < "${NTSYNC_PATCH}.patch" ||
+                ntsync_fail "NTSync 平台补丁应用失败（可能不兼容当前内核）"
+            else
+              echo "::notice title=NTSync 兼容层::上游平台补丁上下文不匹配，已改用本地 lockdep 兼容层（功能等价）"
+              sed -n '1,30p' /tmp/ntsync_platform.log
+              EXTRA_FILES=$(grep '^diff --git' "${NTSYNC_PATCH}.patch" |
+                grep -v 'drivers/misc/Kconfig' | grep -v 'drivers/misc/Makefile' |
+                grep -v 'include/linux/lockdep.h' | grep -v 'kernel/locking/lockdep.c' || true)
+              if [ -n "$EXTRA_FILES" ]; then
+                echo "::warning title=NTSync 兼容层::平台补丁还包含未适配的改动，已跳过：$EXTRA_FILES"
+              fi
+              ntsync_wire_misc || ntsync_fail "NTSync 平台接线写入失败"
+              ntsync_inject_lockdep_compat || ntsync_fail "NTSync lockdep 兼容层注入失败"
+              if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+                echo "" >> "$GITHUB_STEP_SUMMARY"
+                echo "> 🔧 **NTSync**：上游平台补丁与本内核上下文不匹配，已启用本地 lockdep 兼容层（功能等价，构建继续）" >> "$GITHUB_STEP_SUMMARY"
+              fi
+            fi
           fi
 
           cd ..
