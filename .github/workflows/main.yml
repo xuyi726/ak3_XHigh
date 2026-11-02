@@ -487,7 +487,6 @@ jobs:
           # 功能开关显示
           echo "LZ4_STATUS=${{ inputs.use_zram && '开启' || '未开启' }}" >> $GITHUB_ENV
           echo "BBG_STATUS=${{ inputs.use_bbg && '开启' || '未开启' }}" >> $GITHUB_ENV
-          echo "NET_ENHANCE_STATUS=${{ inputs.use_net_enhance && '开启' || '未开启' }}" >> $GITHUB_ENV
           echo "REKERNEL_STATUS=${{ inputs.use_rekernel && '开启' || '未开启' }}" >> $GITHUB_ENV
           if [[ "${{ inputs.use_kpm }}" == enabled* ]]; then
             echo "KPM_STATUS=开启（未修补）" >> $GITHUB_ENV
@@ -497,7 +496,19 @@ jobs:
             echo "KPM_STATUS=未开启" >> $GITHUB_ENV
           fi
 
-          # Hook 类型（SukiSU / BakaSU / FinaSU 的 SUSFS 集成均为 fs 内联钩子）
+          # Droidspaces 容器支持（含 NTSync）
+          if [ "${{ inputs.droidspaces }}" = "off" ]; then
+            echo "DROIDSPACES_STATUS=未开启" >> $GITHUB_ENV
+          elif [ "${{ inputs.droidspaces_ntsync }}" = "true" ]; then
+            echo "DROIDSPACES_STATUS=开启（NTSync）" >> $GITHUB_ENV
+          else
+            echo "DROIDSPACES_STATUS=开启" >> $GITHUB_ENV
+          fi
+
+          # 网络增强 (BBRv3 / IPSet / Qdisc / CIFS)
+          echo "NET_ENHANCE_STATUS=${{ inputs.use_net_enhance && '开启' || '未开启' }}" >> $GITHUB_ENV
+
+          # Hook 类型
           echo "HOOK_TYPE=SUSFS Inline Hooks" >> $GITHUB_ENV
 
           # Mount 类型（FinaSU 使用 metamodule 模块架构）
@@ -507,8 +518,9 @@ jobs:
             echo "MOUNT_TYPE=Magic Mount" >> $GITHUB_ENV
           fi
 
-          # 发布标题
+          # 发布标题与正文标题
           echo "RELEASE_NAME=GKI Kernel: ${KSU_NAME} ${KSU_VER} + SUSFS ${SUS_VER}" >> $GITHUB_ENV
+          echo "RELEASE_HEADER=**${KSU_NAME} ${KSU_VER}** + **SUSFS ${SUS_VER}**" >> $GITHUB_ENV
 
       # ==================== 验证构建状态 ====================
       # 确保所有选中的构建任务都成功完成
@@ -677,7 +689,7 @@ jobs:
           cat > release_body.md << EOF
           ## GKI Kernel Release
 
-          **$KSU_NAME $KSU_VER** + **SUSFS $SUS_VER**
+          $RELEASE_HEADER
 
           | 项目 | 内容 |
           |:---|:---|
@@ -691,16 +703,18 @@ jobs:
           | 项目 | 内容 |
           |:---|:---|
           | KernelSU 变体 | $KSU_NAME |
+          | KernelSU 版本 | $KSU_VER |
           | KernelSU 分支 | $BRANCH_INFO |
           | SUSFS | $SUS_VER |
           | Hook 类型 | $HOOK_TYPE |
           | 挂载方式 | $MOUNT_TYPE |
           | LTO | thin |
+          | ZRAM / LZ4KD | $LZ4_STATUS |
           | BBG 基带保护 | $BBG_STATUS |
           | 网络增强 (BBRv3 / IPSet / Qdisc / CIFS) | $NET_ENHANCE_STATUS |
-          | ZRAM / LZ4KD | $LZ4_STATUS |
           | Re-Kernel 驱动 | $REKERNEL_STATUS |
           | KPM | $KPM_STATUS |
+          | Droidspaces 容器支持 | $DROIDSPACES_STATUS |
 
           ### 下载说明
 
