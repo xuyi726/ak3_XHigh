@@ -617,9 +617,9 @@ jobs:
             "FinaSU")
               echo "添加 ${{ inputs.ksu_variant }}..."
               git clone https://github.com/LyraVoid/FinaSU.git KernelSU
-              # 内核侧检出到官方最新 Release 的同一提交（ksuCommit 由 get-manager
-              # 从 Release tag 解析；Kbuild 以 30000 + git 提交数 计算版本，与官方
-              # 发行管理器 versionCode 同源同值），保证与发行的管理器严格一致
+              # 内核侧检出到 get-manager 选定的提交：正式通道为 Release 标签提交，
+              # 最新通道为 build-manager.yml 最新构建提交；Kbuild 以 30000 + git
+              # 提交数计算版本，与对应管理器 versionCode 同源同值
               if [ -n "$KSU_COMMIT" ]; then
                 if ! git -C KernelSU checkout --detach "$KSU_COMMIT" 2>/dev/null; then
                   git -C KernelSU fetch origin "$KSU_COMMIT"
