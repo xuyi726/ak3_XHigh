@@ -43,7 +43,7 @@ Built upon [AnyKernel3](https://github.com/osm0sis/AnyKernel3), this repository 
 |  SUSFS | Kernel-level hiding working with KSU to complete environment spoofing |
 |  ZRAM LZ4 | ZRAM Compression Algorithm Patch |
 |  BBG (Baseband Guard) | BBG patch to protect the baseband partitions from accidental wipe |
-|  Network enhancement | Optional IPSet + BBR kernel config (BBR default congestion control, fq/fq_codel qdisc, full IPSet types up to 65534 sets, IPv6 NAT/masquerade, extra congestion algorithms) |
+|  Network enhancement | Optional network stack upgrade: BBRv3 backport where available (defaults to BBR v1 otherwise), full IPSet types up to 65534 sets, fq/fq_codel/cake qdisc, connmark, IPv6 NAT/masquerade, TTL/HopLimit match, WireGuard, CIFS |
 |  KPM | Optional KPM feature / build-time patching |
 |  Re-Kernel | Optional Re-Kernel driver integration |
 |  CVE-2026-43499 | Optional automatic application of the rtmutex fix |
