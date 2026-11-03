@@ -28,7 +28,7 @@ on:
         value: ${{ jobs.get_ksu_manager.outputs.managerVer }}
 
       ksuCommit:
-        description: "内核侧对齐用的提交 SHA（正式通道=Release 标签提交；最新通道=空）"
+        description: "内核侧对齐用的提交 SHA（正式通道=Release 标签提交；最新通道=所选 CI 构建提交或 HEAD）"
         value: ${{ jobs.get_ksu_manager.outputs.ksuCommit }}
 
       channelTag:
@@ -122,7 +122,8 @@ jobs:
       # 正式：管理器取官方「正式版」Release（prerelease=false，标签提交 + 该 Release 的 APK）；
       #       上游没有正式版 Release 时（如 BakaSU 只有 rc 预发布），
       #       改用官方默认分支最新上传构建，内核仍锁定该构建提交
-      # 最新：管理器取与默认分支 HEAD 版本一致的最新构建（不限分支），内核锁定该 HEAD
+      # 最新：管理器取与默认分支 HEAD 版本一致的最新构建（不限分支），内核锁定该 HEAD；
+      #       FinaSU 取 build-manager.yml 最新构建，内核锁定该构建提交
       - name: 选择管理器来源（构建通道）
         id: channel
         run: |
@@ -309,11 +310,11 @@ jobs:
             rm -rf manager-artifacts && mkdir -p manager-artifacts
           fi
 
-          # ==================== B. FinaSU：Release 管理器（无 CI 管理器产物） ====================
-          if [ "$VARIANT" == "FinaSU" ]; then
-            # FinaSU 只发布 GitHub Releases（无 CI 管理器产物）：
-            #   最新通道 = 管理器/证书取最新 Release APK，内核锁定 master HEAD
-            #   正式回退 = 正式 Release 管理器不可用时同样落到这里，内核锁定 Release 标签提交
+          # ==================== B. FinaSU：正式通道 Release 管理器 ====================
+          if [ "$VARIANT" == "FinaSU" ] && [ "${PIN_MODE:-pin}" != "head" ]; then
+            # 正式通道（含正式 Release 不可用时的回退）：
+            #   管理器/证书取最新 Release APK，内核锁定 Release 标签提交
+            #   最新通道改走下方 build-manager.yml 的 CI 管理器产物
             echo "FinaSU：管理器取最新 Release APK..."
             REL_JSON=""
             for ATTEMPT in 1 2 3; do
@@ -378,10 +379,15 @@ jobs:
             exit 0
           fi
 
-          # ---------- SukiSU / BakaSU：官方 CI 构建的管理器 ----------
+          # ---------- 最新通道：官方 CI 构建的管理器（SukiSU / BakaSU / FinaSU） ----------
           get_manager_artifacts() {
             local artifacts="$1"
-            if [ "${{ inputs.kernelsu_variant }}" == "BakaSU" ]; then
+            if [ "$VARIANT" == "FinaSU" ]; then
+              # build-manager.yml 的正式分发产物固定为 manager；
+              # manager-gradle 是未重签的中间产物，证书与内核第二信任槽不一致。
+              printf '%s' "$artifacts" | jq -r \
+                '.artifacts[] | select(.name == "manager") | "\(.name)\t\(.archive_download_url)"'
+            elif [ "$VARIANT" == "BakaSU" ]; then
               printf '%s' "$artifacts" | jq -r \
                 '.artifacts[] | select(.name == "Manager-release" or .name == "Spoofed-Manager-release") | "\(.name)\t\(.archive_download_url)"'
             else
@@ -400,10 +406,11 @@ jobs:
           }
 
           # 最新通道：先锁定默认分支 HEAD，再把管理器限定为「版本与该 HEAD 一致」的构建，
-          # 避免出现内核 35249 / 管理器 35248 这种版本错位
+          # 避免出现内核 35249 / 管理器 35248 这种版本错位。
+          # FinaSU 例外：直接取 build-manager.yml 的最新构建，内核锁定该构建提交。
           HEAD_SHA=""
           HEAD_VERSION=""
-          if [ "${PIN_MODE:-pin}" = "head" ]; then
+          if [ "${PIN_MODE:-pin}" = "head" ] && [ "$VARIANT" != "FinaSU" ]; then
             HEAD_SHA=$(git -C KernelSU rev-parse "origin/${EXPECTED_BRANCH}^{commit}" 2>/dev/null || true)
             if [ -z "$HEAD_SHA" ]; then
               HEAD_SHA=$(git ls-remote "https://github.com/$REPO.git" "refs/heads/$EXPECTED_BRANCH" 2>/dev/null | awk '{print $1}')
@@ -513,11 +520,17 @@ jobs:
           fi
 
           ORDERED_FILE=$(mktemp)
-          # 候选行格式：创建时间 \t 构建ID \t 提交 \t 分支（优先级在 awk 里补在第 1 列）
-          sort -t$'\t' -k1,1r "$CAND_UNIQ" \
-            | awk -F'\t' -v pref="$PREF_SHA" -v br="$EXPECTED_BRANCH" \
-                '{ p = (pref != "" && $3 == pref) ? 0 : ($4 == br ? 1 : 2); print p "\t" $0 }' \
-            | sort -t$'\t' -k1,1n -k2,2r > "$ORDERED_FILE"
+          if [ "$VARIANT" == "FinaSU" ]; then
+            # 最新通道：严格按构建时间倒序，取 build-manager.yml 最新成功构建
+            sort -t$'\t' -k1,1r "$CAND_UNIQ" \
+              | awk -F'\t' '{ print "0\t" $0 }' > "$ORDERED_FILE"
+          else
+            # 候选行格式：创建时间 \t 构建ID \t 提交 \t 分支（优先级在 awk 里补在第 1 列）
+            sort -t$'\t' -k1,1r "$CAND_UNIQ" \
+              | awk -F'\t' -v pref="$PREF_SHA" -v br="$EXPECTED_BRANCH" \
+                  '{ p = (pref != "" && $3 == pref) ? 0 : ($4 == br ? 1 : 2); print p "\t" $0 }' \
+              | sort -t$'\t' -k1,1n -k2,2r > "$ORDERED_FILE"
+          fi
           rm -f "$CAND_UNIQ"
 
           CAND_COUNT=$(wc -l < "$ORDERED_FILE")
@@ -527,6 +540,7 @@ jobs:
           MANAGER_BUILD_ID=""
           MANAGER_HEAD_SHA=""
           MANAGER_BRANCH=""
+          MANAGER_APK=""
           while IFS=$'\t' read -r PRIO CREATED BUILD_ID CAND_SHA CAND_BRANCH; do
             ARTIFACTS=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
               "https://api.github.com/repos/$REPO/actions/runs/$BUILD_ID/artifacts")
@@ -573,6 +587,7 @@ jobs:
             MANAGER_BUILD_ID="$BUILD_ID"
             MANAGER_HEAD_SHA="$CAND_SHA"
             MANAGER_BRANCH="$CAND_BRANCH"
+            MANAGER_APK="$APK_FILE"
             break
           done < "$ORDERED_FILE"
           rm -f "$ORDERED_FILE"
@@ -608,14 +623,32 @@ jobs:
           echo "MANAGER_VERSION=$MANAGER_VERSION" >> $GITHUB_ENV
           echo "managerVer=$MANAGER_VERSION" >> $GITHUB_OUTPUT
 
-          if [ "${PIN_MODE:-pin}" = "head" ] && [ -n "$HEAD_SHA" ]; then
+          if [ "$VARIANT" == "FinaSU" ]; then
+            echo "从 CI 管理器 APK 提取签名证书..."
+            CERT_INFO=$(python3 "$GITHUB_WORKSPACE/scripts/finasu_compat/extract_manager_cert.py" "$MANAGER_APK" | head -n1)
+            if [ -n "$CERT_INFO" ]; then
+              CERT_SIZE=$(echo "$CERT_INFO" | awk '{print $1}')
+              CERT_HASH=$(echo "$CERT_INFO" | awk '{print $2}')
+              echo "managerCertSize=$CERT_SIZE" >> $GITHUB_OUTPUT
+              echo "managerCertHash=$CERT_HASH" >> $GITHUB_OUTPUT
+              echo "CI 管理器证书 size=$CERT_SIZE sha256=$CERT_HASH"
+            else
+              echo "::warning title=证书缺失::无法从 CI 管理器 APK 提取签名证书，内核侧将回退 Release APK 证书提取"
+            fi
+          fi
+
+          if [ "${PIN_MODE:-pin}" = "head" ] && [ -n "$HEAD_SHA" ] && [ "$VARIANT" != "FinaSU" ]; then
             if [ -n "$HEAD_VERSION" ] && [ "$MANAGER_VERSION" != "$HEAD_VERSION" ]; then
               echo "::warning::最新通道：未找到与 $EXPECTED_BRANCH HEAD 版本 $HEAD_VERSION 一致的管理器，回退到 $MANAGER_VERSION"
             fi
             echo "最新通道：内核锁定 $EXPECTED_BRANCH HEAD ${HEAD_SHA:0:8}，管理器版本 $MANAGER_VERSION"
             echo "ksuCommit=$HEAD_SHA" >> $GITHUB_OUTPUT
           else
-            echo "内核锁定构建提交 ${MANAGER_HEAD_SHA:0:8}，管理器版本 $MANAGER_VERSION"
+            if [ "$VARIANT" == "FinaSU" ]; then
+              echo "最新通道：内核锁定 build-manager 构建提交 ${MANAGER_HEAD_SHA:0:8}，管理器版本 $MANAGER_VERSION"
+            else
+              echo "内核锁定构建提交 ${MANAGER_HEAD_SHA:0:8}，管理器版本 $MANAGER_VERSION"
+            fi
             echo "ksuCommit=$MANAGER_HEAD_SHA" >> $GITHUB_OUTPUT
           fi
 
