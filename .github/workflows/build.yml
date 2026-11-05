@@ -756,8 +756,9 @@ jobs:
       # android16-6.12 GKI 编译直接失败；kpm super_access.c 引用的
       # netlink_kernel_cfg.cb_mutex 在 Linux 6.11 被移除，KPM 开启时同样失败
       # （该文件已被上游迁至 kernel/extension/kpm/，补丁按实际路径定位）。
-      # 补丁内部以 LINUX_VERSION_CODE 守卫，6.10 及以下内核行为不变，
-      # SukiSU 上游修复后按内容检测自动跳过。
+      # lsm_id 仍走补丁；cb_mutex 改为按条件编译深度检测，只锚那一行注入
+      # LINUX_VERSION_CODE 守卫，6.10 及以下内核行为不变；上游已自行用
+      # #ifdef KSU_NETLINK_CFG_HAS_CB_MUTEX 守卫时按内容检测自动跳过。
       - name: 应用 SukiSU 内核 API 兼容补丁 (6.8+ lsm_id / 6.11+ netlink cb_mutex)
         if: inputs.ksu_variant == 'SukiSU'
         working-directory: ${{ env.KERNEL_ROOT }}

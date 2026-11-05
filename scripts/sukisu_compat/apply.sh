@@ -63,35 +63,137 @@ else
   echo "lsm_hook.c 不存在或无需 lsm_id 兼容补丁，跳过"
 fi
 
-# 位置随上游重构迁移过（kernel/kpm/ -> kernel/extension/kpm/），按实际路径定位，
-# 避免守卫路径写死导致补丁静默跳过（6.12 会因此直接编译失败）
-SUPER_REL=""
-for cand in kernel/extension/kpm/super_access.c kernel/kpm/super_access.c; do
-  if [ -f "$KSU_DIR/$cand" ]; then
-    SUPER_REL="$cand"
-    break
-  fi
-done
-if [ -z "$SUPER_REL" ] && [ -d "$KSU_DIR/kernel" ]; then
-  SUPER_REL="$(cd "$KSU_DIR" && find kernel -type f -name super_access.c -path '*kpm*' 2>/dev/null | head -n 1)"
-fi
+# ---- cb_mutex（6.11+ 移除 netlink_kernel_cfg.cb_mutex）----
+# 判据只看产物本身：DEFINE_MEMBER(netlink_kernel_cfg, cb_mutex) 这一行是否已经被
+# 任意条件编译包住 —— 按 DYNAMIC_STRUCT_BEGIN/END(netlink_kernel_cfg) 块里的
+# #if / #ifdef / #ifndef 与 #endif 深度判定，而不是认某个具体字符串。
+#
+# 为什么必须这么判：上游 SukiSU 自己治了这个问题，形态和我们旧补丁不同 ——
+#   #ifdef KSU_NETLINK_CFG_HAS_CB_MUTEX
+#   DEFINE_MEMBER(netlink_kernel_cfg, cb_mutex)
+#   #endif
+# 该宏由 kernel/Kbuild（main 分支）/ kernel/Makefile（builtin 分支）用 sed 直接
+# 探测目标内核 include/linux/netlink.h 里有没有 cb_mutex 来决定，比按
+# LINUX_VERSION_CODE 判更准（厂商 backport 时版本号会骗人）。
+# 旧判据只认文件里有没有 "KERNEL_VERSION(6, 11, 0)" 这个串，于是把上游已经修好的
+# 文件判成"还没守卫"，而旧补丁那 7 行连续 DEFINE_MEMBER 的上下文已被上游插进的
+# #ifdef/#endif 打散 ⇒ patch 必然 Hunk #1 FAILED ⇒ fail ⇒ 整场内核构建中断
+# （2026-11-05 CI 实测）。
+#
+# 注入同样只锚这一行本身，前后长什么样都不影响；产物与旧补丁逐字节相同。
+# 重复执行幂等，上游自行修复后自动跳过。
+sukisu_cb_mutex_guard_state() {
+  # $1 = 目标文件；返回 0=已被条件编译守卫 1=裸露未守卫
+  #             2=找不到 netlink_kernel_cfg 结构块 3=没有 cb_mutex 成员
+  perl -e '
+    open(my $fh, "<", $ARGV[0]) or exit 3;
+    binmode $fh;
+    my $t = do { local $/; <$fh> };
+    close $fh;
+    unless ($t =~ /DYNAMIC_STRUCT_BEGIN\(\s*netlink_kernel_cfg\s*\)(.*?)DYNAMIC_STRUCT_END\(\s*netlink_kernel_cfg\s*\)/s) {
+      exit 2;
+    }
+    my ($depth, $found, $guarded) = (0, 0, 0);
+    for my $line (split /\n/, $1) {
+      $depth++   if $line =~ /^\s*#\s*(?:if|ifdef|ifndef)\b/;
+      if ($line =~ /^\s*DEFINE_MEMBER\s*\(\s*netlink_kernel_cfg\s*,\s*cb_mutex\s*\)/) {
+        $found = 1;
+        $guarded = ($depth > 0);
+      }
+      $depth-- if $depth > 0 && $line =~ /^\s*#\s*endif\b/;
+    }
+    exit 3 unless $found;
+    exit($guarded ? 0 : 1);
+  ' "$1"
+}
 
-if [ -n "$SUPER_REL" ] && grep -q 'DEFINE_MEMBER(netlink_kernel_cfg, cb_mutex)' "$KSU_DIR/$SUPER_REL"; then
-  if grep -q 'KERNEL_VERSION(6, 11, 0)' "$KSU_DIR/$SUPER_REL"; then
-    echo "$SUPER_REL 已包含 cb_mutex 版本守卫，跳过"
-  else
-    echo "应用 cb_mutex 兼容补丁 (6.11+ 移除 netlink_kernel_cfg.cb_mutex, 目标 $SUPER_REL)..."
-    # 补丁头固定为旧路径 kernel/kpm/，这里改写为实际路径后应用
-    sed -e "s|kernel/kpm/super_access.c|$SUPER_REL|g" "$COMPAT_DIR/sukisu-cb-mutex-6.11.patch" \
-      | patch -p1 --forward -d "$KSU_DIR" \
-      || fail "cb_mutex 兼容补丁应用失败（SukiSU 上游代码可能已变化）"
-    grep -q 'KERNEL_VERSION(6, 11, 0)' "$KSU_DIR/$SUPER_REL" \
-      || fail "cb_mutex 兼容补丁应用后校验失败"
-    echo "$SUPER_REL: 6.11+ 已跳过 cb_mutex 成员"
+sukisu_cb_mutex_guard_inject() {
+  # $1 = 目标文件；只在 cb_mutex 那一行前后加守卫，保留原行尾风格
+  perl -e '
+    open(my $fh, "<", $ARGV[0]) or exit 4;
+    binmode $fh;
+    my $t = do { local $/; <$fh> };
+    close $fh;
+    my @L = $t =~ /[^\r\n]*(?:\r?\n|\z)/gs;
+    my $nl = (grep { /\r\n\z/ } @L) ? "\r\n" : "\n";
+    my $i = -1;
+    for my $k (0 .. $#L) {
+      if ($L[$k] =~ /^[ \t]*DEFINE_MEMBER[ \t]*\([ \t]*netlink_kernel_cfg[ \t]*,[ \t]*cb_mutex[ \t]*\)[ \t]*(?:\r?\n)?\z/) {
+        $i = $k;
+        last;
+      }
+    }
+    exit 4 if $i < 0;
+    splice @L, $i + 1, 0, "#endif$nl";
+    splice @L, $i,     0,
+      "/* netlink_kernel_cfg.cb_mutex was removed in Linux 6.11 */$nl",
+      "#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 11, 0)$nl";
+    open(my $out, ">", $ARGV[0]) or exit 4;
+    binmode $out;
+    print $out join "", @L;
+    close $out;
+  ' "$1"
+}
+
+sukisu_cb_mutex_compat() {
+  local ksu="$1" rel="" cand f st=0
+  # 位置随上游重构迁移过（kernel/kpm/ -> kernel/extension/kpm/），按实际路径定位，
+  # 避免守卫路径写死导致静默跳过（6.12 会因此直接编译失败）
+  for cand in kernel/extension/kpm/super_access.c kernel/kpm/super_access.c; do
+    if [ -f "$ksu/$cand" ]; then
+      rel="$cand"
+      break
+    fi
+  done
+  if [ -z "$rel" ] && [ -d "$ksu/kernel" ]; then
+    rel="$(cd "$ksu" && find kernel -type f -name super_access.c -path '*kpm*' 2>/dev/null | head -n 1)"
   fi
-else
-  echo "未找到 kpm/super_access.c 或无需 cb_mutex 兼容补丁，跳过"
-fi
+  if [ -z "$rel" ]; then
+    echo "未找到 kpm/super_access.c，cb_mutex 兼容步骤跳过"
+    return 0
+  fi
+  f="$ksu/$rel"
+
+  sukisu_cb_mutex_guard_state "$f" || st=$?
+  case "$st" in
+    0)
+      echo "$rel: cb_mutex 成员已被条件编译守卫（上游自行处理），跳过"
+      # 上游这套守卫靠构建系统探测目标内核头文件来定义宏；探测一旦没了，
+      # 6.11 以前的内核会静默丢掉 cb_mutex（能编过，只是 KPM 少一个成员）。
+      if grep -q 'KSU_NETLINK_CFG_HAS_CB_MUTEX' "$f" \
+        && ! grep -Rqs -- '-DKSU_NETLINK_CFG_HAS_CB_MUTEX' "$ksu/kernel/Kbuild" "$ksu/kernel/Makefile" 2>/dev/null; then
+        echo "::warning title=cb_mutex 守卫宏无人定义::$rel 用 KSU_NETLINK_CFG_HAS_CB_MUTEX 守卫，但 kernel/Kbuild 与 kernel/Makefile 里都没有 -D 该宏，特性会被静默编掉（构建不中断）"
+      fi
+      return 0
+      ;;
+    3)
+      echo "$rel 不含 netlink_kernel_cfg.cb_mutex 成员，无需兼容，跳过"
+      return 0
+      ;;
+    2)
+      echo "::warning title=cb_mutex 结构块未识别::$rel 里找不到 DYNAMIC_STRUCT_BEGIN/END(netlink_kernel_cfg)，不改文件、不中断构建"
+      return 0
+      ;;
+    1) ;;
+    *)
+      echo "::warning title=cb_mutex 守卫状态未知::判据返回 $st，不改文件、不中断构建"
+      return 0
+      ;;
+  esac
+
+  echo "给 $rel 的 cb_mutex 成员加 6.11 版本守卫（按行锚定，不依赖上下文）..."
+  sukisu_cb_mutex_guard_inject "$f" \
+    || fail "cb_mutex 守卫注入失败（$rel 里那一行的形态不认识，SukiSU 上游代码可能又变了）"
+
+  st=0
+  sukisu_cb_mutex_guard_state "$f" || st=$?
+  [ "$st" = 0 ] || fail "cb_mutex 守卫注入后校验失败（状态 $st）"
+  grep -q 'KERNEL_VERSION(6, 11, 0)' "$f" \
+    || fail "cb_mutex 注入后缺少 6.11 版本判据"
+  echo "$rel: 6.11+ 已跳过 cb_mutex 成员"
+}
+
+sukisu_cb_mutex_compat "$KSU_DIR"
 
 # ---- Seccomp 过滤模式（builtin 分支）----
 # 背景：builtin 分支在 app 启动路径（zygote setresuid 钩子）对管理器与授权
