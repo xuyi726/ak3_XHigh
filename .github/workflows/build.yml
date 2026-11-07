@@ -346,7 +346,7 @@ jobs:
       - name: 源码编译新版 pahole（BUILTIN_SOURCE 需要）
         if: env.BUILTIN_SOURCE == 'true'
         run: |
-          sudo apt-get install -y cmake zlib1g-dev
+          sudo apt-get install -y cmake zlib1g-dev libdw-dev libelf-dev
           git clone --depth=1 https://git.kernel.org/pub/scm/devel/pahole/pahole.git /tmp/pahole
           cmake -S /tmp/pahole -B /tmp/pahole/build -DCMAKE_BUILD_TYPE=Release
           cmake --build /tmp/pahole/build -j"$(nproc --all)"
