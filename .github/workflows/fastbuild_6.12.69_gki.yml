@@ -15,12 +15,13 @@ on:
   workflow_dispatch:
     inputs:
       ksu_type:
-        description: '内置KernelSU(FinaSU/无内置KSU,默认FinaSU)'
+        description: '内置KernelSU(FinaSU/BakaSU/无内置KSU,默认FinaSU)'
         required: true
         type: choice
         default: 'finasu'
         options:
           - 'finasu'
+          - 'bakasu'
           - 'none'
       susfs_enable:
         description: '是否开启susfs(用于增强隐藏环境挂载功能; 可能轻微增加耗电，上游更新导致不稳定时或不需要可关闭)'
@@ -296,6 +297,15 @@ jobs:
               || { echo "::error::FinaSU Kbuild 管理器证书注入失败"; exit 1; }
             # CI 检出的分支名不是 master，把完整版本的分支段固定为品牌名
             sed -i 's/@$(KSU_VERSION_BRANCH)/@xuyi/' KernelSU/kernel/Kbuild
+          elif [[ ${{ github.event.inputs.ksu_type }} == "bakasu" ]]; then
+            echo "正在配置BakaSU..."
+            curl -LSs "https://raw.githubusercontent.com/Baka-SU/BakaSU/refs/heads/main/kernel/setup.sh" | bash -s main
+            echo 'CONFIG_KSU_FULL_NAME_FORMAT="%TAG_NAME%-%COMMIT_SHA%@xuyi"' >> ./common/arch/arm64/configs/gki_defconfig
+            cd ./KernelSU
+            # 与 BakaSU 内核侧版本号算法一致：30000 + 提交数 + 700
+            KSU_VERSION=$(expr $(git rev-list --count HEAD) + 30700)
+            echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
+            echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
           else
             echo "已选择无内置KernelSU模式，跳过KernelSU配置..."
           fi
@@ -363,6 +373,15 @@ jobs:
           echo "CONFIG_KSU=y" >> ./common/arch/arm64/configs/gki_defconfig
           if [[ "${{ github.event.inputs.susfs_enable }}" == "false" ]]; then
             echo "CONFIG_KSU_SUSFS=n" >> ./common/arch/arm64/configs/gki_defconfig
+          fi
+          # FinaSU + SUSFS：优先启用 SUSFS Inline hook；编译失败时在编译步骤回退到默认 Tracepoint
+          if [[ "${{ github.event.inputs.ksu_type }}" == "finasu" && "${{ github.event.inputs.susfs_enable }}" == "true" ]]; then
+            if grep -q '^config KSU_HOOK_SUSFS_INLINE' ./KernelSU/kernel/Kconfig 2>/dev/null; then
+              echo "CONFIG_KSU_HOOK_SUSFS_INLINE=y" >> ./common/arch/arm64/configs/gki_defconfig
+              echo "FinaSU: 优先使用 SUSFS Inline hook 后端"
+            else
+              echo "::warning title=SUSFS Inline 不可用::当前 FinaSU 未提供 Inline hook 选项，使用默认 Tracepoint 后端"
+            fi
           fi
           # 添加对 Mountify (backslashxx/mountify) 模块的支持
           echo "CONFIG_TMPFS_XATTR=y" >> ./common/arch/arm64/configs/gki_defconfig
@@ -671,9 +690,19 @@ jobs:
           sudo rm -rf /usr/local/lib/android &
           sudo rm -rf /opt/ghc &
           sudo rm -rf /opt/hostedtoolcache/CodeQL &
-          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="clang" LD="ld.lld" OBJCOPY="llvm-objcopy" O=out gki_defconfig &&
-          export CC="$(pwd)/cc-wrapper" && export LD="$(pwd)/ld-wrapper" &&
-          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" OBJCOPY="llvm-objcopy" O=out Image
+          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="clang" LD="ld.lld" OBJCOPY="llvm-objcopy" O=out gki_defconfig
+          export CC="$(pwd)/cc-wrapper" && export LD="$(pwd)/ld-wrapper"
+          if ! make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" OBJCOPY="llvm-objcopy" O=out Image; then
+            if grep -qx 'CONFIG_KSU_HOOK_SUSFS_INLINE=y' ./arch/arm64/configs/gki_defconfig; then
+              echo "::warning title=SUSFS Inline 编译失败::回退到默认 Tracepoint 后端重新编译"
+              sed -i '/^CONFIG_KSU_HOOK_SUSFS_INLINE=y$/d' ./arch/arm64/configs/gki_defconfig
+              make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="clang" LD="ld.lld" OBJCOPY="llvm-objcopy" O=out gki_defconfig
+              make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" OBJCOPY="llvm-objcopy" O=out Image
+              echo "已回退到默认 Tracepoint 后端完成编译"
+            else
+              exit 1
+            fi
+          fi
           
           # 编译后时间劫持二次校验
           echo "--- 编译后环境时间: $(LD_PRELOAD=$PRELOAD_LIBS date) ---"
@@ -713,6 +742,8 @@ jobs:
           fi
           if [[ ${{ github.event.inputs.ksu_type }} == "finasu" ]]; then
             KSU_TYPENAME="FinaSU"
+          elif [[ ${{ github.event.inputs.ksu_type }} == "bakasu" ]]; then
+            KSU_TYPENAME="BakaSU"
           else
             KSU_TYPENAME="none"
           fi
@@ -806,6 +837,8 @@ jobs:
           echo "TAG_HEAD=$TAG_HEAD" >> $GITHUB_ENV
           if [[ ${{ github.event.inputs.ksu_type }} == "finasu" ]]; then
             KSU_TYPENAME="FinaSU"
+          elif [[ ${{ github.event.inputs.ksu_type }} == "bakasu" ]]; then
+            KSU_TYPENAME="BakaSU"
           else
             KSU_TYPENAME="无内置KSU"
           fi
@@ -832,6 +865,7 @@ jobs:
           - Re-Kernel支持：${{ github.event.inputs.rekernel_enable }}
           - 内核级基带保护支持：${{ github.event.inputs.baseband_guard }}
           - FinaSU管理器下载：[LyraVoid/FinaSU](https://github.com/LyraVoid/FinaSU/releases)
+          - BakaSU管理器下载：[BakaSU_CI](https://github.com/cctv18/BakaSU_CI/releases)
           
           ### ⏫️ 更新内容：
           - 更新${{ env.KSU_TYPENAME }}至最新版本（${{ needs.build.outputs.ksuver }}）
@@ -840,7 +874,7 @@ jobs:
           ### 📋 安装方法 | Installation Guide
           1. 若你的手机已经安装了第三方Recovery（如TWRP)，可下载对应机型的AnyKernel刷机包后进入Recovery模式，通过Recovery刷入刷机包后重启设备；
           2. 若你的手机之前已有 root 权限，可在手机上安装[HorizonKernelFlasher](https://github.com/libxzr/HorizonKernelFlasher/releases)，在HorizonKernelFlasher中刷入AnyKernel刷机包并重启；
-          3. 若你之前已刷入FinaSU内核，且FinaSU管理器已更新至最新版本，可在FinaSU管理器中直接刷入AnyKernel刷机包并重启；
+          3. 若你之前已刷入同款KSU内核（FinaSU/BakaSU），且对应管理器已更新至最新版本，可在管理器中直接刷入AnyKernel刷机包并重启；
           4. 刷入无lz4kd补丁版的内核前若刷入过lz4kd补丁版的内核，为避免出错，请先关闭zram模块；
           5. 由于KernelSU上游更新了元模块功能，最新版KSU管理器需要配合元模块(metamodule)才能正常挂载模块。目前的元模块包括[meta overlayfs](https://github.com/KernelSU-Modules-Repo/meta-overlayfs), [mountify](https://github.com/backslashxx/mountify), [meta magicmount](https://github.com/7a72/meta-magic_mount/), [meta magicmount rs](https://github.com/Tools-cx-app/meta-magic_mount/), [hybrid mount](https://github.com/YuzakiKokuban/meta-hybrid_mount)等。若你是第一次使用KSU或刚从旧版KSU管理器升级至新版，请先安装一个元模块，这样其他涉及系统挂载的模块才能正常运行；
           
