@@ -692,12 +692,18 @@ jobs:
           sudo rm -rf /opt/hostedtoolcache/CodeQL &
           make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="clang" LD="ld.lld" OBJCOPY="llvm-objcopy" O=out gki_defconfig
           export CC="$(pwd)/cc-wrapper" && export LD="$(pwd)/ld-wrapper"
-          if ! make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" OBJCOPY="llvm-objcopy" O=out Image; then
+          # O=out 嵌套在源码树内时 srctree 为 ..，FinaSU 由 $(srctree)/$(src) 推导出的驱动路径会多一层 ..，这里显式传入绝对路径
+          KSU_KERNEL_DIR_ARG=""
+          if [[ "${{ github.event.inputs.ksu_type }}" != "none" ]]; then
+            KSU_KERNEL_DIR_ARG="KSU_KERNEL_DIR=$(pwd)/../KernelSU/kernel"
+            echo "KSU_KERNEL_DIR=$(pwd)/../KernelSU/kernel"
+          fi
+          if ! make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" OBJCOPY="llvm-objcopy" O=out $KSU_KERNEL_DIR_ARG Image; then
             if grep -qx 'CONFIG_KSU_HOOK_SUSFS_INLINE=y' ./arch/arm64/configs/gki_defconfig; then
               echo "::warning title=SUSFS Inline 编译失败::回退到默认 Tracepoint 后端重新编译"
               sed -i '/^CONFIG_KSU_HOOK_SUSFS_INLINE=y$/d' ./arch/arm64/configs/gki_defconfig
               make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="clang" LD="ld.lld" OBJCOPY="llvm-objcopy" O=out gki_defconfig
-              make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" OBJCOPY="llvm-objcopy" O=out Image
+              make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" OBJCOPY="llvm-objcopy" O=out $KSU_KERNEL_DIR_ARG Image
               echo "已回退到默认 Tracepoint 后端完成编译"
             else
               exit 1
