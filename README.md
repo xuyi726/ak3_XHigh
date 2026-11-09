@@ -31,7 +31,6 @@ Built upon [AnyKernel3](https://github.com/osm0sis/AnyKernel3), this repository 
 | 13 | 5.15 | `kernel-a13-5-15.yml` |
 | 14 | 6.1 | `kernel-a14-6-1.yml` |
 | 15 | 6.6 | `kernel-a15-6-6.yml` |
-| 16 | 6.12 | `kernel-a16-6-12.yml` |
 | Custom | Any | `kernel-custom.yml` |
 
 ## Features

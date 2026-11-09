@@ -188,7 +188,6 @@ jobs:
           SUKISU_PATCHES=$GITHUB_WORKSPACE/SukiSU_patch
           ZZH_PATCHES=$GITHUB_WORKSPACE
           ANYKERNEL3=$GITHUB_WORKSPACE/AnyKernel3
-          BUILTIN_SOURCE=${{ inputs.android_version == 'android16' && inputs.sub_level == '69' }}
           ACTION_BUILD=$GITHUB_WORKSPACE/Action-Build
           AVBTOOL=$GITHUB_WORKSPACE/kernel-build-tools/linux-x86/bin/avbtool
           MKBOOTIMG=$GITHUB_WORKSPACE/mkbootimg/mkbootimg.py
@@ -315,66 +314,20 @@ jobs:
           echo "使用当前仓库补丁目录: $ZZH_PATCHES"
           git clone https://github.com/Numbersf/Action-Build.git --depth=1
 
-      - name: 下载 Kokuban 工具链（sm8850 专用：clang-r536225 + rust + bindgen）
-        if: env.BUILTIN_SOURCE == 'true'
-        run: |
-          TC="$KERNEL_ROOT/toolchain"
-          mkdir -p "$TC" && cd "$TC"
-          BASE="https://github.com/cctv18/oneplus_sm8650_toolchain/releases/download/LLVM-Clang19-r536225"
-          curl -fL --retry 3 -o clang.zip "$BASE/clang-r536225.zip"
-          curl -fL --retry 3 -o rust.zip "$BASE/rust.zip"
-          curl -fL --retry 3 -o build-tools.zip "$BASE/build-tools.zip"
-          curl -fL --retry 3 -o bindgen.tar.xz "https://github.com/rust-lang/rust-bindgen/releases/download/v0.69.5/bindgen-cli-x86_64-unknown-linux-gnu.tar.xz"
-          unzip -q clang.zip -d clang && unzip -q rust.zip -d rust && unzip -q build-tools.zip -d build-tools
-          mkdir -p bindgen && tar -xJf bindgen.tar.xz -C bindgen --strip-components=1
-          CLANG_DIR="$(dirname "$(find "$TC" -type f -name clang | head -1)")"
-          RUSTC="$(find "$TC" -type f -name rustc | head -1)"
-          BINDGEN="$(find "$TC" -type f -name bindgen | head -1)"
-          test -n "$CLANG_DIR" -a -n "$RUSTC" -a -n "$BINDGEN" || { echo "::error::工具链解压布局异常"; find "$TC" -maxdepth 2 | head -30; exit 1; }
-          LIBCLANG_DIR="$(dirname "$(find "$TC" -name "libclang.so*" | head -1)")"
-          {
-            echo "TC_CLANG_BIN=$CLANG_DIR"
-            echo "TC_RUSTC=$RUSTC"
-            echo "TC_BINDGEN=$BINDGEN"
-            echo "LIBCLANG_PATH=${LIBCLANG_DIR:-$CLANG_DIR/../lib}"
-            echo "$CLANG_DIR" >> "$GITHUB_PATH"
-            echo "$(dirname "$RUSTC")" >> "$GITHUB_PATH"
-            echo "$(dirname "$BINDGEN")" >> "$GITHUB_PATH"
-          } >> "$GITHUB_ENV"
-          echo "clang: $CLANG_DIR | rustc: $RUSTC | bindgen: $BINDGEN"
-
-      - name: 源码编译新版 pahole（BUILTIN_SOURCE 需要）
-        if: env.BUILTIN_SOURCE == 'true'
-        run: |
-          sudo apt-get install -y cmake zlib1g-dev
-          git clone --depth=1 https://git.kernel.org/pub/scm/devel/pahole/pahole.git /tmp/pahole
-          cmake -S /tmp/pahole -B /tmp/pahole/build -DCMAKE_BUILD_TYPE=Release
-          cmake --build /tmp/pahole/build -j"$(nproc --all)"
-          sudo cmake --install /tmp/pahole/build
-          # 装进 /usr/local/lib 的 libdwarves*.so 必须让动态链接器看得见，
-          # 否则 pahole 一执行就是 cannot open shared object file（退出码 127）。
-          sudo ldconfig
-          echo "LD_LIBRARY_PATH=/usr/local/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
-          hash -r
-          echo "PATH 中的 pahole: $(command -v pahole)"
-          test "$(command -v pahole)" = "/usr/local/bin/pahole" || echo "::warning::PATH 中的 pahole 不是 /usr/local/bin/pahole"
-          /usr/local/bin/pahole --version || { echo "::error::新版 pahole 无法执行（共享库路径问题）"; exit 1; }
-
       - name: 应用 AnyKernel3 刷入模板（按 A17 开关注入系统版本门槛）
         run: |
           if [ "${{ inputs.a17_compat }}" = "true" ]; then
             TARGET_SYS="a17"
             GATE_MSG="仅允许 Android 17 系统刷入"
           else
-            TARGET_SYS="a12-16"
-            GATE_MSG="仅允许 Android 12-16 系统刷入"
+            TARGET_SYS="a12-15"
+            GATE_MSG="仅允许 Android 12-15 系统刷入"
           fi
           sed "s|@@TARGET_SYS@@|$TARGET_SYS|" "$GITHUB_WORKSPACE/ak3-template/anykernel.sh" > "$ANYKERNEL3/anykernel.sh"
           grep -q "TARGET_SYS=\"$TARGET_SYS\"" "$ANYKERNEL3/anykernel.sh" || { echo "::error::系统版本门槛注入失败"; exit 1; }
           echo "已覆盖上游 anykernel.sh：$GATE_MSG"
 
       - name: 初始化并同步内核源码
-        if: env.BUILTIN_SOURCE != 'true'
         working-directory: ${{ env.KERNEL_ROOT }}
         run: |
           git clone https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-gnu-6.4.1.git gcc
@@ -494,17 +447,6 @@ jobs:
               fi
             fi
           fi
-
-      - name: 使用合并的 sm8850 内核源码（android16-6.12.69 专用）
-        if: env.BUILTIN_SOURCE == 'true'
-        working-directory: ${{ env.KERNEL_ROOT }}
-        run: |
-          echo "BUILTIN_SOURCE=true：跳过 AOSP repo sync，使用仓库内 kernel/sm8850（Kokuban android16-6.12 可开机基线）"
-          cp -a "$GITHUB_WORKSPACE/kernel/sm8850" ./common
-          # zip -> Windows 路径丢失可执行位，kbuild 会直接调用散布全树的脚本
-          # （scripts/、arch/*/vdso、tools/ 等），对整个源码树统一补回
-          chmod -R u+x ./common
-          grep -E "^(VERSION|PATCHLEVEL|SUBLEVEL) " ./common/Makefile
 
       - name: 确定 KernelSU 分支
         id: ksu-branch
@@ -753,7 +695,7 @@ jobs:
 
       # SukiSU builtin 分支的 hook/lsm_hook.c 仍以旧签名调用
       # security_add_hooks(hooks, count, "ksu")，6.8+ 内核要求 const struct lsm_id *，
-      # android16-6.12 GKI 编译直接失败；kpm super_access.c 引用的
+      # GKI 编译直接失败；kpm super_access.c 引用的
       # netlink_kernel_cfg.cb_mutex 在 Linux 6.11 被移除，KPM 开启时同样失败
       # （该文件已被上游迁至 kernel/extension/kpm/，补丁按实际路径定位）。
       # lsm_id 仍走补丁；cb_mutex 改为按条件编译深度检测，只锚那一行注入
@@ -806,9 +748,6 @@ jobs:
           SLOT_NAME=$(echo "$SLOT" | sed 's/\(.\)/\1_/g; s/_$//')
           echo "应用 Droidspaces SYSVIPC kABI 修复补丁 (槽位: $SLOT / $SLOT_NAME)..."
           case "$KERNEL_VER" in
-            6.12)
-              PATCH_FILE="$DROIDSPACES_PATCHES/kernel-6.12/001.GKI-6.12-or-above-fix_sysvipc_kabi.patch"
-              ;;
             5.10|5.15|6.1|6.6)
               PATCH_FILE="$DROIDSPACES_PATCHES/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kabi_${SLOT_NAME}.patch"
               ;;
@@ -840,21 +779,6 @@ jobs:
             POSIX_PATCH="$DROIDSPACES_PATCHES/below-kernel-6.12/002.5.10_or_lower_use_android_abi_padding_for_posix_mqueue.patch"
             if ! patch -p1 --forward < "$POSIX_PATCH"; then
               echo "::warning::POSIX_MQUEUE kABI 补丁应用失败，可能已应用或上下文不匹配"
-            fi
-          fi
-
-          # Android 16 / 6.12 的 rust_binder.ko 在启用 IPC_NS 后会引用
-          # init_ipc_ns 与 put_ipc_ns，但当前 AOSP common 分支尚未导出这两个符号。
-          # 这里补齐导出，避免 modpost 因 undefined symbol 失败。
-          if [ "$KERNEL_VER" = "6.12" ]; then
-            if [ -f "ipc/msgutil.c" ] && ! grep -qF 'EXPORT_SYMBOL(init_ipc_ns);' "ipc/msgutil.c"; then
-              sed -i '/^struct msg_msgseg {/i EXPORT_SYMBOL(init_ipc_ns);' "ipc/msgutil.c"
-              echo "已为 init_ipc_ns 补充符号导出"
-            fi
-
-            if [ -f "ipc/namespace.c" ] && ! grep -qF 'EXPORT_SYMBOL(put_ipc_ns);' "ipc/namespace.c"; then
-              sed -i '/^static struct ns_common \*ipcns_get(/i EXPORT_SYMBOL(put_ipc_ns);' "ipc/namespace.c"
-              echo "已为 put_ipc_ns 补充符号导出"
             fi
           fi
 
@@ -953,9 +877,6 @@ jobs:
             android15-6.6)
               NTSYNC_PATCH="ntsync_compat_android15-6.6"
               ;;
-            android16-6.12)
-              NTSYNC_PATCH="ntsync_compat_android16-6.12"
-              ;;
             *)
               echo "::warning::NTSync: 未适配 ${{ inputs.android_version }} / ${{ inputs.kernel_version }}，跳过补丁"
               exit 0
@@ -1004,7 +925,7 @@ jobs:
               ' drivers/misc/Kconfig > drivers/misc/Kconfig.ntsync &&
                 mv drivers/misc/Kconfig.ntsync drivers/misc/Kconfig
             else
-              # 已存在但被标 BROKEN（6.12 主线）时摘掉依赖，否则该符号永远不可见。
+              # 已存在但被标 BROKEN 时摘掉依赖，否则该符号永远不可见。
               ntsync_strip_broken
             fi
 
@@ -1032,7 +953,7 @@ jobs:
               grep -q 'LOCK_STATE_NOT_HELD' include/linux/lockdep.h
           }
 
-          # 6.12 主线已带 NTSYNC 源码，但 Kconfig 里标了 depends on BROKEN，
+          # 新版本主线已带 NTSYNC 源码，但 Kconfig 里标了 depends on BROKEN，
           # 此时不能算「已集成」，否则 defconfig 的 CONFIG_NTSYNC=y 会被 Kconfig 丢弃。
           ntsync_kconfig_block() {
             awk '
@@ -1110,7 +1031,7 @@ jobs:
             fi
           fi
 
-          # 兜底：部分版本的平台补丁只改 Kconfig（如 6.12 仅摘 BROKEN），Makefile 接线需在此确保。
+          # 兜底：部分版本的平台补丁只改 Kconfig（如仅摘 BROKEN），Makefile 接线需在此确保。
           ntsync_wired || ntsync_wire_misc || ntsync_fail "NTSync 平台接线不完整（Kconfig/Makefile）"
 
           cd ..
@@ -1156,7 +1077,7 @@ jobs:
         run: |
           # 前置检查：所有补丁资源必须存在，缺失时按兼容跳过策略处理，避免修改到一半再失败
           # 版本补丁来源：本仓库自带 zram_patch/<ver>/ 优先，SukiSU_patch 兜底；
-          # 上游尚未覆盖的版本（如 6.12）由本仓库补齐
+          # 上游尚未覆盖的版本由本仓库补齐
           pick_zram_patch() {
             local name="$1"
             if [ -f "$ZZH_PATCHES/zram_patch/${{ inputs.kernel_version }}/$name" ]; then
@@ -1309,19 +1230,12 @@ jobs:
             sed -i 's/CONFIG_ZRAM=m/CONFIG_ZRAM=y/g' "$CONFIG_FILE"
           fi
 
-          if [ "${{ inputs.android_version }}" = "android14" ] || [ "${{ inputs.android_version }}" = "android15" ] || [ "${{ inputs.android_version }}" = "android16" ]; then
+          if [ "${{ inputs.android_version }}" = "android14" ] || [ "${{ inputs.android_version }}" = "android15" ]; then
             sed -i 's/"drivers\/block\/zram\/zram\.ko",//g; s/"mm\/zsmalloc\.ko",//g' "$KERNEL_ROOT/common/modules.bzl"
           fi
 
           if grep -q "CONFIG_ZSMALLOC=y" "$CONFIG_FILE" && grep -q "CONFIG_ZRAM=y" "$CONFIG_FILE"; then
-            # ZRAM_BACKEND_* 仅在 6.12+ 的 Kconfig 中声明；bazel 构建的 kernel_config
-            # 会校验 fragment 中每个配置项都必须存在于 Kconfig，旧版本内核带上
-            # 这些行会直接导致编译失败，因此 6.12 以下需剔除
-            if [ "$(printf '%s\n' "6.12" "${{ inputs.kernel_version }}" | sort -V | head -1)" = "6.12" ]; then
-              cat "$ZZH_PATCHES/config/zram.config" >> "$CONFIG_FILE"
-            else
-              grep -v '^CONFIG_ZRAM_BACKEND_' "$ZZH_PATCHES/config/zram.config" >> "$CONFIG_FILE"
-            fi
+            cat "$ZZH_PATCHES/config/zram.config" >> "$CONFIG_FILE"
           fi
 
       - name: 添加 BBG 基带保护补丁
@@ -1391,7 +1305,6 @@ jobs:
             *) BBR3_PATCH="" ;;
           esac
 
-          # android16-6.12 无 backport 补丁，仅保留基线 BBR v1
           if [ -n "$BBR3_PATCH" ]; then
             [ -f "$BBR3_PATCH" ] || net_fail "BBRv3 补丁不存在：${BBR3_PATCH#"$KERNEL_PATCHES"/}"
             if patch -p1 --dry-run --forward < "$BBR3_PATCH" >/dev/null 2>&1; then
@@ -1474,11 +1387,6 @@ jobs:
           for cfg in CIFS NETWORK_FILESYSTEMS KEYS CIFS_XATTR CIFS_POSIX; do
             set_config "CONFIG_$cfg" y
           done
-
-          # 6.12 的 NETFS 内置化后需移除 modules.bzl 的模块条目，否则打包失败
-          if [ "$AVER" = "android16" ] && grep -q '"fs/netfs/netfs.ko",' modules.bzl 2>/dev/null; then
-            sed -i '/"fs\/netfs\/netfs\.ko",/d' modules.bzl
-          fi
 
           # 写后校验：关键符号必须落盘
           grep -q '^CONFIG_IP_SET=y$' "$DEFCONFIG" || net_fail "IPSet 配置写入校验失败"
@@ -1672,7 +1580,6 @@ jobs:
             case "${{ inputs.android_version }}-${{ inputs.kernel_version }}" in
               "android14-6.1")  KMI_TAG="android14-11" ;;
               "android15-6.6")  KMI_TAG="android15-8" ;;
-              "android16-6.12") KMI_TAG="android16-5" ;;
               *) KMI_TAG="${{ inputs.android_version }}" ;;
             esac
 
@@ -1796,9 +1703,6 @@ jobs:
                   FRAG_FLAG="--defconfig_fragment=//common:arch/arm64/configs/ksu.fragment"
                 fi
                 LTO_FLAG="--lto=thin"
-                if [ "${{ inputs.kernel_version }}" = "6.12" ]; then
-                  LTO_FLAG="--lto=none"
-                fi
                 tools/bazel build --disk_cache=/home/runner/.cache/bazel --config=fast $LTO_FLAG $FRAG_FLAG //common:kernel_aarch64_dist || exit 1
                 strings ./bazel-bin/common/kernel_aarch64/Image | grep 'Linux version'
               fi
@@ -1926,15 +1830,13 @@ jobs:
         if: inputs.use_zram == true && env.ZRAM_SKIPPED != 'true'
         run: |
           case "${{ inputs.kernel_version }}" in
-            6.1|6.6|6.12) ;;
+            6.1|6.6) ;;
             *)
-              echo "::warning title=CRC 还原跳过::内置官方 CRC 表仅覆盖 6.1（android14-11）、6.6（android15-8）与 6.12（android16 KMI）；${{ inputs.kernel_version }} 开启 ZRAM 时厂商模块可能仍因 CRC 不符拒载"
+              echo "::warning title=CRC 还原跳过::内置官方 CRC 表仅覆盖 6.1（android14-11）与 6.6（android15-8）；${{ inputs.kernel_version }} 开启 ZRAM 时厂商模块可能仍因 CRC 不符拒载"
               exit 0
               ;;
           esac
-          if [ "$BUILTIN_SOURCE" = "true" ]; then
-            TARGET_PATH="$KERNEL_ROOT/common/out/arch/arm64/boot"
-          elif [ "${{ inputs.android_version }}" == "android12" ] || [ "${{ inputs.android_version }}" == "android13" ]; then
+          if [ "${{ inputs.android_version }}" == "android12" ] || [ "${{ inputs.android_version }}" == "android13" ]; then
             TARGET_PATH="$KERNEL_ROOT/out/${{ inputs.android_version }}-${{ inputs.kernel_version }}/dist"
           else
             TARGET_PATH="$KERNEL_ROOT/bazel-bin/common/kernel_aarch64"
@@ -2008,7 +1910,7 @@ jobs:
           cp ./boot-lz4.img ../${{ inputs.android_version }}-${{ inputs.kernel_version }}.${NAME_SUBLEVEL}-${{ inputs.os_patch_level }}-boot-lz4.img
 
       - name: 构建 Boot 镜像 (Android 13+)
-        if: inputs.android_version == 'android13' || inputs.android_version == 'android14' || inputs.android_version == 'android15' || inputs.android_version == 'android16'
+        if: inputs.android_version == 'android13' || inputs.android_version == 'android14' || inputs.android_version == 'android15'
         working-directory: bootimgs
         run: |
           gzip -n -k -f -9 ./Image > ./Image.gz

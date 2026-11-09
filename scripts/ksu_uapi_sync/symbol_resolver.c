@@ -301,7 +301,7 @@ static __nocfi int ksu_batch_lookup_indexed(struct ksu_batch_ctx *ctx)
  * resolved names, or -errno.
  *
  * 6.1+ kernels index kallsyms by name, so names are looked up one by one
- * there; whatever that misses ('$' suffixes, ".llvm." on 6.12+, unknown
+ * there; whatever that misses ('$' suffixes, ".llvm." aliases, unknown
  * names) and every name on older kernels, where a lookup by name is a linear
  * scan, is resolved by a single kallsyms walk.
  */

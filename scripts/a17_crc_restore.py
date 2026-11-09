@@ -47,24 +47,6 @@ OFFICIAL = {
     b"LZ4_setStreamDecode":           0x3B321462,
 }
 
-# android16-6.12 (KMI android16-5/6) official LZ4 CRCs - read out of a real
-# CI-built 6.12.69 Image WITHOUT the zram stack (clean branch-native CRCs,
-# device-proven: that exact build boots HyperOS4/A17 vendor modules).
-OFFICIAL_612 = {
-    b"LZ4_compress_HC":               0x2CF136FA,
-    b"LZ4_compress_HC_continue":      0x16AA5F1F,
-    b"LZ4_compress_default":          0xE04B6E87,
-    b"LZ4_compress_fast":             0x932EDF0D,
-    b"LZ4_compress_fast_continue":    0x755C86A3,
-    b"LZ4_decompress_safe":           0x7AA9B8BF,
-    b"LZ4_decompress_safe_continue":  0x1ADA4747,
-    b"LZ4_decompress_safe_partial":   0x1633528F,
-    b"LZ4_loadDict":                  0xCAE7EB86,
-    b"LZ4_loadDictHC":                0xF4C1D9FC,
-    b"LZ4_resetStreamHC":             0x930EF13E,
-    b"LZ4_setStreamDecode":           0xB0AC7316,
-}
-
 # android14-6.1 (KMI android14-11) official LZ4 CRCs - read out of the real
 # Redmi K80 (zorn) stock boot.img (6.1.157-android14-11-g2de7246565ac-mi,
 # header v4, ramdisk_size=0).  That KMI exports ONLY these two LZ4 symbols -
@@ -81,7 +63,6 @@ OFFICIAL_61 = {
 TABLES = {
     "6.1": OFFICIAL_61,
     "6.6": OFFICIAL,
-    "6.12": OFFICIAL_612,
 }
 
 
@@ -284,7 +265,7 @@ def restore(path, table):
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:
-        raise SystemExit("usage: a17_crc_restore.py <Image> <kernel-version, e.g. 6.1|6.6|6.12>")
+        raise SystemExit("usage: a17_crc_restore.py <Image> <kernel-version, e.g. 6.1|6.6>")
     img, kv = sys.argv[1], sys.argv[2]
     if kv not in TABLES:
         raise SystemExit("::error::no official CRC table for kernel version %s" % kv)

@@ -340,9 +340,6 @@ patch_chain_is_required() {
     6.6)
       (( kernel_sublevel < 144 ))
       ;;
-    6.12)
-      (( kernel_sublevel < 95 ))
-      ;;
     *)
       return 1
       ;;
@@ -352,7 +349,7 @@ patch_chain_is_required() {
 case "$kernel_version" in
   5.10|5.15)
     ;;
-  6.1|6.6|6.12)
+  6.1|6.6)
     if [[ ! "$kernel_sublevel" =~ ^[0-9]+$ ]]; then
       echo "ERROR: non-numeric SUBLEVEL for $kernel_version: $kernel_sublevel" >&2
       exit 2
@@ -380,10 +377,6 @@ case "$kernel_version" in
     ;;
   6.1|6.6)
     primary_patch="$patch_dir/cve-2026-43499-rtmutex-6.1-6.6.patch"
-    fallback_patch=""
-    ;;
-  6.12)
-    primary_patch="$patch_dir/cve-2026-43499-rtmutex-6.12.patch"
     fallback_patch=""
     ;;
   *)

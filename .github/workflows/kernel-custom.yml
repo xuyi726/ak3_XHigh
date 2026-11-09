@@ -17,7 +17,6 @@ on:
           - "5.15"
           - "6.1"
           - "6.6"
-          - "6.12"
         default: "5.10"
       # 内核子版本：每个内核版本独立下拉，仅对应版本生效，选后自动匹配安全补丁级别
       sub_level_5_10:
@@ -172,23 +171,6 @@ on:
           - "139 (2026-07)"
           - "143 (2026-10)"
           - "lts (6.6.144)"
-      sub_level_6_12:
-        description: "6.12 子版本 (选择后自动匹配安全补丁级别；仅内核版本为 6.12 时生效)"
-        required: false
-        type: choice
-        default: "auto (自动匹配最新安全补丁级别)"
-        options:
-          - "auto (自动匹配最新安全补丁级别)"
-          - "23 (2025-06)"
-          - "30 (2025-07)"
-          - "38 (2025-08)"
-          - "38 (2025-09)"
-          - "58 (2025-12)"
-          - "69 (2026-03)"
-          - "81 (2026-06)"
-          - "92 (2026-09)"
-          - "lts (6.12.96)"
-
       # ==================== KernelSU 配置 ====================
       kernelsu_variant:
         description: "KernelSU 变体"
@@ -231,7 +213,7 @@ on:
           - "enabled (开启)"
           - "patched (开启并修补)"
       droidspaces:
-        description: "Droidspaces 容器支持 (5.10~6.6: 槽位补丁, 6.12: 开/关)"
+        description: "Droidspaces 容器支持 (5.10~6.6: 槽位补丁)"
         required: false
         type: choice
         options:
@@ -316,7 +298,6 @@ jobs:
           SUB_LEVEL_5_15: ${{ inputs.sub_level_5_15 }}
           SUB_LEVEL_6_1: ${{ inputs.sub_level_6_1 }}
           SUB_LEVEL_6_6: ${{ inputs.sub_level_6_6 }}
-          SUB_LEVEL_6_12: ${{ inputs.sub_level_6_12 }}
         run: |
           python3 <<'PY'
           import json
@@ -330,7 +311,6 @@ jobs:
               "5.15": "android13",
               "6.1": "android14",
               "6.6": "android15",
-              "6.12": "android16",
           }
           android_version = android_map.get(kernel_version)
           if android_version is None:

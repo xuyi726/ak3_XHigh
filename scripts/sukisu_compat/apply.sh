@@ -5,7 +5,7 @@
 #   1) builtin 分支 kernel/hook/lsm_hook.c 仍以旧签名
 #      security_add_hooks(hooks, count, "ksu") 注册 LSM 钩子，
 #      6.8+ 内核要求 (hooks, count, const struct lsm_id *)，
-#      android16-6.12 GKI 编译报 -Wincompatible-pointer-types（-Werror）；
+#      GKI 编译报 -Wincompatible-pointer-types（-Werror）；
 #   2) <kpm>/super_access.c 引用 netlink_kernel_cfg.cb_mutex，
 #      该成员在 Linux 6.11 被上游移除，KPM 开启时 6.11+ 内核编译失败
 #      （上游 2026-10-19 重构后该文件由 kernel/kpm/ 迁至
@@ -138,7 +138,7 @@ sukisu_cb_mutex_guard_inject() {
 sukisu_cb_mutex_compat() {
   local ksu="$1" rel="" cand f st=0
   # 位置随上游重构迁移过（kernel/kpm/ -> kernel/extension/kpm/），按实际路径定位，
-  # 避免守卫路径写死导致静默跳过（6.12 会因此直接编译失败）
+  # 避免守卫路径写死导致静默跳过
   for cand in kernel/extension/kpm/super_access.c kernel/kpm/super_access.c; do
     if [ -f "$ksu/$cand" ]; then
       rel="$cand"
