@@ -389,7 +389,7 @@ jobs:
             if grep -q '^config KSU_HOOK_SUSFS_INLINE' ./KernelSU/kernel/Kconfig 2>/dev/null; then
               echo "CONFIG_KSU_HOOK_SUSFS_INLINE=y" >> ./common/arch/arm64/configs/gki_defconfig
               FINASU_INLINE=1
-              echo "FinaSU: 优先使用 SUSFS Inline hook 后端"
+              echo "FinaSU:已启用 SUSFS Inline hook 后端"
             else
               echo "::warning title=SUSFS Inline 不可用::当前 FinaSU 未提供 Inline hook 选项，使用默认 Tracepoint 后端"
             fi
