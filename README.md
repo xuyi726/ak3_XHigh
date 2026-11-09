@@ -21,6 +21,7 @@
 Built upon [AnyKernel3](https://github.com/osm0sis/AnyKernel3), this repository uses GitHub Actions to automatically compile Android GKI kernels. It integrates multiple KernelSU variants and SUSFS kernel-level spoofing solutions Add practical patches such as ZRAM and BBG.
 
 - The build workflows are adapted from [zzh20188/GKI_KernelSU_SUSFS](https://github.com/zzh20188/GKI_KernelSU_SUSFS) and [Wild Kernels](https://github.com/WildKernels/GKI_KernelSU_SUSFS)
+- 6.12.69 GKI 工作流（[`fastbuild_6.12.69_gki.yml`](.github/workflows/fastbuild_6.12.69_gki.yml)）：拉取上游 https://github.com/cctv18/oppo_oplus_realme_sm8850 的源码（GKI 内核源码、LLVM/Clang 19 + Rust 工具链及附属补丁）后构建
 - Flashing rule: ***It can be flashed as long as the kernel version matches.***
 
 ## Supported Kernel Versions
@@ -97,6 +98,7 @@ A commit is a hash string representing the state of a repository at a certain po
 - [zzh20188/GKI_KernelSU_SUSFS](https://github.com/zzh20188/GKI_KernelSU_SUSFS) / [WildKernels/GKI_KernelSU_SUSFS](https://github.com/WildKernels/GKI_KernelSU_SUSFS) / [LingLuo17/Anykernel3](https://github.com/LingLuo17/Anykernel3)
 - [SukiSU](https://sukisu.org/) / [BakaSU](https://bakasu.org/) / [FinaSU](https://github.com/LyraVoid/FinaSU)
 - [SUSFS](https://gitlab.com/simonpunk/susfs4ksu)
+- [cctv18/oppo_oplus_realme_sm8850](https://github.com/cctv18/oppo_oplus_realme_sm8850)
 
 <div align="center">
 
