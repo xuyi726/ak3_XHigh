@@ -322,6 +322,15 @@ jobs:
             cp ./susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
             cd ./common
             patch -p1 -F 3 < 50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch || true
+            # FinaSU 的 Inline 后端还要求 fs/exec.c 中的 preinit 直调点，cctv18 补丁未包含
+            if [[ "${{ github.event.inputs.ksu_type }}" == "finasu" ]] && grep -q '^config KSU_HOOK_SUSFS_INLINE' ../KernelSU/kernel/Kconfig; then
+              echo "正在补充 FinaSU Inline 所需的 preinit 调用点..."
+              wget -q "https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/finasu_inline_preinit_6.12.patch" -O /tmp/finasu_inline_preinit_6.12.patch
+              patch -p1 -F 3 < /tmp/finasu_inline_preinit_6.12.patch
+              grep -q 'preinit_fd = ksu_setup_preinit_file(&filename' fs/exec.c \
+                && grep -q 'ksu_preinit_handle_post_execveat(&fd' fs/exec.c \
+                || { echo "::error::FinaSU Inline preinit 调用点补丁应用失败"; exit 1; }
+            fi
             cd ..
           else
             echo "已选择无内置KernelSU模式，跳过susfs配置..."
@@ -375,9 +384,11 @@ jobs:
             echo "CONFIG_KSU_SUSFS=n" >> ./common/arch/arm64/configs/gki_defconfig
           fi
           # FinaSU + SUSFS：优先启用 SUSFS Inline hook；编译失败时在编译步骤回退到默认 Tracepoint
+          FINASU_INLINE=0
           if [[ "${{ github.event.inputs.ksu_type }}" == "finasu" && "${{ github.event.inputs.susfs_enable }}" == "true" ]]; then
             if grep -q '^config KSU_HOOK_SUSFS_INLINE' ./KernelSU/kernel/Kconfig 2>/dev/null; then
               echo "CONFIG_KSU_HOOK_SUSFS_INLINE=y" >> ./common/arch/arm64/configs/gki_defconfig
+              FINASU_INLINE=1
               echo "FinaSU: 优先使用 SUSFS Inline hook 后端"
             else
               echo "::warning title=SUSFS Inline 不可用::当前 FinaSU 未提供 Inline hook 选项，使用默认 Tracepoint 后端"
@@ -402,8 +413,12 @@ jobs:
           echo "CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y" >> ./common/arch/arm64/configs/gki_defconfig
           # 禁用 defconfig 检查
           sed -i 's/check_defconfig//' ./common/build.config.gki
-          #跳过将uapi标准头安装到 usr/include 目录的不必要操作，节省编译时间
-          echo "CONFIG_HEADERS_INSTALL=n" >> ./common/arch/arm64/configs/gki_defconfig
+          # FinaSU Inline 的 preinit 需要 usr/include 中的 UAPI 头；其余情况跳过安装以节省编译时间
+          if [[ $FINASU_INLINE == 1 ]]; then
+            echo "CONFIG_HEADERS_INSTALL=y" >> ./common/arch/arm64/configs/gki_defconfig
+          else
+            echo "CONFIG_HEADERS_INSTALL=n" >> ./common/arch/arm64/configs/gki_defconfig
+          fi
           # 6.12内核Rust配置
           echo "CONFIG_RUST=y" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_ANDROID_BINDER_IPC_RUST=m" >> ./common/arch/arm64/configs/gki_defconfig
