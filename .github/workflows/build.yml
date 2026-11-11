@@ -320,8 +320,8 @@ jobs:
             TARGET_SYS="a17"
             GATE_MSG="仅允许 Android 17 系统刷入"
           else
-            TARGET_SYS="a12-15"
-            GATE_MSG="仅允许 Android 12-15 系统刷入"
+            TARGET_SYS="a12-16"
+            GATE_MSG="仅允许 Android 12-16 系统刷入"
           fi
           sed "s|@@TARGET_SYS@@|$TARGET_SYS|" "$GITHUB_WORKSPACE/ak3-template/anykernel.sh" > "$ANYKERNEL3/anykernel.sh"
           grep -q "TARGET_SYS=\"$TARGET_SYS\"" "$ANYKERNEL3/anykernel.sh" || { echo "::error::系统版本门槛注入失败"; exit 1; }
