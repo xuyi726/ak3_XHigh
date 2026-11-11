@@ -602,7 +602,7 @@ jobs:
           if [ "${{ inputs.a17_compat }}" != "false" ]; then
             A17_NOTE="> 本包适配 Android 17 系统版本（已将 LZ4 符号 CRC 还原为官方 OGKI 值，修复 HyperOS4 厂商模块 CRC 校验拒载导致的不开机）：仅 Android 17 系统可正常刷入；设备当前内核须与包同版本系（如 5.10.x ↔ 5.10.x）。"
           else
-            A17_NOTE="> 本包面向 Android 12-15 系统版本：仅 Android 12/13/14/15 系统可正常刷入；设备当前内核须与包同版本系（如 5.10.x ↔ 5.10.x）。"
+            A17_NOTE="> 本包面向 Android 12-16 系统版本：仅 Android 12/13/14/15/16 系统可正常刷入；设备当前内核须与包同版本系（如 5.10.x ↔ 5.10.x）。"
           fi
           if [[ "$KSU_REF" =~ ^[0-9a-f]{40}$ ]]; then
             KSU_DISPLAY_REF="${KSU_REF:0:7}"
