@@ -29,6 +29,11 @@ on:
         required: true
         type: boolean
         default: 'true'
+      kpm_enable:
+        description: '是否开启KPM内核模块支持(仅SukiSU生效; 需配合支持KPM的管理器使用, 不需要可保持默认关闭)'
+        required: true
+        type: boolean
+        default: 'false'
       lz4_enable:
         description: '是否安装 lz4 1.10.0+zstd 1.5.7 补丁'
         required: true
@@ -419,6 +424,19 @@ jobs:
               echo "FinaSU: 已启用 SUSFS Inline hook 后端"
             else
               echo "::warning title=SUSFS Inline 不可用::当前 FinaSU 未提供 Inline hook 选项，使用默认 Tracepoint 后端"
+            fi
+          fi
+          # KPM 为 SukiSU 内核内置功能（CONFIG_KPM），其它变体无此配置项
+          if [[ "${{ github.event.inputs.kpm_enable }}" == "true" ]]; then
+            if [[ "${{ github.event.inputs.ksu_type }}" == "sukisu" ]]; then
+              if grep -RqsE '^[[:space:]]*config[[:space:]]+KPM([[:space:]]|$)' ./KernelSU/kernel/Kconfig 2>/dev/null; then
+                echo "CONFIG_KPM=y" >> ./common/arch/arm64/configs/gki_defconfig
+                echo "SukiSU: 已启用内核内置 KPM"
+              else
+                echo "::warning title=KPM 不可用::当前 SukiSU 代码未声明 CONFIG_KPM，已跳过 KPM 功能"
+              fi
+            else
+              echo "::warning title=KPM 不适用::KPM 仅对 SukiSU 生效，当前变体已忽略该选项"
             fi
           fi
           # 添加对 Mountify (backslashxx/mountify) 模块的支持
@@ -827,6 +845,7 @@ jobs:
           echo "KSU Branch: ${KSU_TYPENAME}" >> ./ak3.log
           echo "KSU Ver: ${KSUVER}" >> ./ak3.log
           echo "susfs: ${{ github.event.inputs.susfs_enable }}" >> ./ak3.log
+          echo "KPM: ${{ github.event.inputs.kpm_enable }}" >> ./ak3.log
           echo "LZ4: ${{ github.event.inputs.lz4_enable }}" >> ./ak3.log
           echo "LZ4KD: ${{ github.event.inputs.lz4kd_enable }}" >> ./ak3.log
           echo "IPset: ${{ github.event.inputs.better_net }}" >> ./ak3.log
@@ -908,6 +927,7 @@ jobs:
           - 机型：欧加真骁龙8E Gen5通用 ${{ env.KERNEL_VERSION }}.${{ env.SUB_VERSION }} 内核（基于 AOSP 官方 android16-6.12-2026-03 源码分支）
           - KSU分支：${{ env.KSU_TYPENAME }}
           - susfs支持：${{ github.event.inputs.susfs_enable }}
+          - KPM支持：${{ github.event.inputs.kpm_enable }}（仅SukiSU生效）
           - LZ4支持：${{ github.event.inputs.lz4_enable }}
           - LZ4KD支持：${{ github.event.inputs.lz4kd_enable }}
           - 网络功能增强：${{ github.event.inputs.better_net }}
