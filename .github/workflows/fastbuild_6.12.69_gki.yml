@@ -478,8 +478,10 @@ jobs:
           echo "CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y" >> ./common/arch/arm64/configs/gki_defconfig
           # 禁用 defconfig 检查
           sed -i 's/check_defconfig//' ./common/build.config.gki
-          # FinaSU Inline 的 preinit 需要 usr/include 中的 UAPI 头；其余情况跳过安装以节省编译时间
-          if [[ $FINASU_INLINE == 1 ]]; then
+          # FinaSU Inline / SukiSU 的 preinit 需要 usr/include 中的 UAPI 头：SUSFS v2.4.0 的 fs/exec.c 直接调用
+          # ksu_setup_preinit_file / ksu_preinit_handle_post_execveat，SukiSU 的 Makefile 在缺头时会关闭 preinit，
+          # 导致链接阶段报未定义符号；其余情况跳过安装以节省编译时间
+          if [[ $FINASU_INLINE == 1 || "${{ github.event.inputs.ksu_type }}" == "sukisu" ]]; then
             echo "CONFIG_HEADERS_INSTALL=y" >> ./common/arch/arm64/configs/gki_defconfig
           else
             echo "CONFIG_HEADERS_INSTALL=n" >> ./common/arch/arm64/configs/gki_defconfig
