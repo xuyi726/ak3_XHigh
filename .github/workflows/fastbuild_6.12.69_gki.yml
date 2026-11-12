@@ -15,13 +15,14 @@ on:
   workflow_dispatch:
     inputs:
       ksu_type:
-        description: '内置KernelSU(FinaSU/BakaSU/无内置KSU,默认FinaSU)'
+        description: '内置KernelSU(SukiSU/FinaSU/BakaSU/无内置KSU,默认FinaSU)'
         required: true
         type: choice
         default: 'finasu'
         options:
           - 'finasu'
           - 'bakasu'
+          - 'sukisu'
           - 'none'
       susfs_enable:
         description: '是否开启susfs(用于增强隐藏环境挂载功能; 可能轻微增加耗电，上游更新导致不稳定时或不需要可关闭)'
@@ -306,9 +307,35 @@ jobs:
             KSU_VERSION=$(expr $(git rev-list --count HEAD) + 30700)
             echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
             echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
+          elif [[ ${{ github.event.inputs.ksu_type }} == "sukisu" ]]; then
+            echo "正在配置SukiSU..."
+            # 开启 SUSFS 时用 builtin 分支（内建 SUSFS 支持与 Inline hook），关闭时用 main
+            if [[ "${{ github.event.inputs.susfs_enable }}" == "true" ]]; then
+              SUKISU_BRANCH=builtin
+            else
+              SUKISU_BRANCH=main
+            fi
+            curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s "$SUKISU_BRANCH"
+            cd ./KernelSU
+            # 与 SukiSU 内核侧算法一致：40000 + main 分支提交数 - 2815（官方管理器 versionCode 同源）
+            KSU_VERSION=$(expr $(git rev-list --count main) + 40000 - 2815)
+            echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
+            echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
+            cd ..
+            # 内核完整版本的 @<branch> 固定为品牌名（CI 检出非 main 分支时管理器显示 @xuyi）
+            bash "$GITHUB_WORKSPACE/scripts/ksu_post_setup.sh" KernelSU sukisu
           else
             echo "已选择无内置KernelSU模式，跳过KernelSU配置..."
           fi
+
+      - name: 应用 SukiSU 内核兼容补丁
+        if: inputs.ksu_type == 'sukisu'
+        run: |
+          cd kernel_workspace
+          # builtin 与官方 main 的 UAPI 需对齐，否则管理器首页会提示"需要更新内核"
+          bash "$GITHUB_WORKSPACE/scripts/ksu_uapi_sync/sync_uapi.sh" KernelSU
+          # 6.8+ security_add_hooks 新签名 / builtin 的 seccomp 过滤模式（内容检测，上游已修复则自动跳过）
+          bash "$GITHUB_WORKSPACE/scripts/sukisu_compat/apply.sh" KernelSU
 
       - name: 应用 KernelSU & SUSFS 补丁
         if: inputs.susfs_enable
@@ -765,6 +792,8 @@ jobs:
             KSU_TYPENAME="FinaSU"
           elif [[ ${{ github.event.inputs.ksu_type }} == "bakasu" ]]; then
             KSU_TYPENAME="BakaSU"
+          elif [[ ${{ github.event.inputs.ksu_type }} == "sukisu" ]]; then
+            KSU_TYPENAME="SukiSU"
           else
             KSU_TYPENAME="none"
           fi
@@ -860,6 +889,8 @@ jobs:
             KSU_TYPENAME="FinaSU"
           elif [[ ${{ github.event.inputs.ksu_type }} == "bakasu" ]]; then
             KSU_TYPENAME="BakaSU"
+          elif [[ ${{ github.event.inputs.ksu_type }} == "sukisu" ]]; then
+            KSU_TYPENAME="SukiSU"
           else
             KSU_TYPENAME="无内置KSU"
           fi
@@ -885,6 +916,7 @@ jobs:
           - ADIOS IO调度器支持：${{ github.event.inputs.adios_enable }}
           - Re-Kernel支持：${{ github.event.inputs.rekernel_enable }}
           - 内核级基带保护支持：${{ github.event.inputs.baseband_guard }}
+          - SukiSU管理器下载：[SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra/releases)
           - FinaSU管理器下载：[LyraVoid/FinaSU](https://github.com/LyraVoid/FinaSU/releases)
           - BakaSU管理器下载：[BakaSU_CI](https://github.com/cctv18/BakaSU_CI/releases)
           
@@ -895,7 +927,7 @@ jobs:
           ### 📋 安装方法 | Installation Guide
           1. 若你的手机已经安装了第三方Recovery（如TWRP)，可下载对应机型的AnyKernel刷机包后进入Recovery模式，通过Recovery刷入刷机包后重启设备；
           2. 若你的手机之前已有 root 权限，可在手机上安装[HorizonKernelFlasher](https://github.com/libxzr/HorizonKernelFlasher/releases)，在HorizonKernelFlasher中刷入AnyKernel刷机包并重启；
-          3. 若你之前已刷入同款KSU内核（FinaSU/BakaSU），且对应管理器已更新至最新版本，可在管理器中直接刷入AnyKernel刷机包并重启；
+          3. 若你之前已刷入同款KSU内核（SukiSU/FinaSU/BakaSU），且对应管理器已更新至最新版本，可在管理器中直接刷入AnyKernel刷机包并重启；
           4. 刷入无lz4kd补丁版的内核前若刷入过lz4kd补丁版的内核，为避免出错，请先关闭zram模块；
           5. 由于KernelSU上游更新了元模块功能，最新版KSU管理器需要配合元模块(metamodule)才能正常挂载模块。目前的元模块包括[meta overlayfs](https://github.com/KernelSU-Modules-Repo/meta-overlayfs), [mountify](https://github.com/backslashxx/mountify), [meta magicmount](https://github.com/7a72/meta-magic_mount/), [meta magicmount rs](https://github.com/Tools-cx-app/meta-magic_mount/), [hybrid mount](https://github.com/YuzakiKokuban/meta-hybrid_mount)等。若你是第一次使用KSU或刚从旧版KSU管理器升级至新版，请先安装一个元模块，这样其他涉及系统挂载的模块才能正常运行；
           
