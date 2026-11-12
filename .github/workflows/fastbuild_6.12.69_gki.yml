@@ -356,23 +356,34 @@ jobs:
         run: |
           cd kernel_workspace
           if [[ ${{ github.event.inputs.ksu_type }} != "none" ]]; then
-            echo "正在添加susfs补丁..."
-            git clone --depth=1 https://github.com/cctv18/susfs4oki.git susfs4ksu -b oki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}
-            cp ./susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch ./common/
-            cp ./susfs4ksu/kernel_patches/fs/* ./common/fs/
-            cp ./susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
-            cd ./common
-            patch -p1 -F 3 < 50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch || true
-            # FinaSU 的 Inline 后端还要求 fs/exec.c 中的 preinit 直调点，cctv18 补丁未包含
-            if [[ "${{ github.event.inputs.ksu_type }}" == "finasu" ]] && grep -q '^config KSU_HOOK_SUSFS_INLINE' ../KernelSU/kernel/Kconfig; then
-              echo "正在补充 FinaSU Inline 所需的 preinit 调用点..."
-              wget -q "https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/finasu_inline_preinit_6.12.patch" -O /tmp/finasu_inline_preinit_6.12.patch
-              patch -p1 -F 3 < /tmp/finasu_inline_preinit_6.12.patch
-              grep -q 'preinit_fd = ksu_setup_preinit_file(&filename' fs/exec.c \
-                && grep -q 'ksu_preinit_handle_post_execveat(&fd' fs/exec.c \
-                || { echo "::error::FinaSU Inline preinit 调用点补丁应用失败"; exit 1; }
+            if [[ "${{ github.event.inputs.ksu_type }}" == "sukisu" ]]; then
+              # SukiSU builtin 驱动无条件调用 priority uid filter 接口，cctv18 oki v2.3.0 没有这些符号；
+              # 改用 susfs4ksu gki-android16-6.12 (v2.4.0)，并交给 susfs_fixes 统一适配（守卫归一化等）
+              echo "正在添加susfs补丁（SukiSU: susfs4ksu gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}）..."
+              git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu -b gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}
+              KERNEL_ROOT="$(pwd)" SUSFS4KSU="$(pwd)/susfs4ksu" KERNEL_PATCHES="$(pwd)/kernel_patches" \
+                ANDROID_VERSION="${{ env.ANDROID_VERSION }}" KERNEL_VERSION="${{ env.KERNEL_VERSION }}" \
+                KSU_VARIANT=SukiSU OS_PATCH_LEVEL= LEGACY_SUKISU_CONFIG= SUB_LEVEL="${SUB_VERSION%%_*}" \
+                bash "$GITHUB_WORKSPACE/scripts/susfs_fixes/apply.sh"
+            else
+              echo "正在添加susfs补丁..."
+              git clone --depth=1 https://github.com/cctv18/susfs4oki.git susfs4ksu -b oki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}
+              cp ./susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch ./common/
+              cp ./susfs4ksu/kernel_patches/fs/* ./common/fs/
+              cp ./susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
+              cd ./common
+              patch -p1 -F 3 < 50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch || true
+              # FinaSU 的 Inline 后端还要求 fs/exec.c 中的 preinit 直调点，cctv18 补丁未包含
+              if [[ "${{ github.event.inputs.ksu_type }}" == "finasu" ]] && grep -q '^config KSU_HOOK_SUSFS_INLINE' ../KernelSU/kernel/Kconfig; then
+                echo "正在补充 FinaSU Inline 所需的 preinit 调用点..."
+                wget -q "https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/finasu_inline_preinit_6.12.patch" -O /tmp/finasu_inline_preinit_6.12.patch
+                patch -p1 -F 3 < /tmp/finasu_inline_preinit_6.12.patch
+                grep -q 'preinit_fd = ksu_setup_preinit_file(&filename' fs/exec.c \
+                  && grep -q 'ksu_preinit_handle_post_execveat(&fd' fs/exec.c \
+                  || { echo "::error::FinaSU Inline preinit 调用点补丁应用失败"; exit 1; }
+              fi
+              cd ..
             fi
-            cd ..
           else
             echo "已选择无内置KernelSU模式，跳过susfs配置..."
           fi
