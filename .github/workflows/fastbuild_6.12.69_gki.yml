@@ -108,6 +108,15 @@ jobs:
       actions: write
       contents: read
     steps:
+      # SukiSU 需要仓库内的 scripts/ksu_post_setup.sh、ksu_uapi_sync、sukisu_compat；
+      # 本工作流其余步骤都不依赖本仓库检出，故仅 SukiSU 时稀疏拉取 scripts/ 目录
+      - name: 检出构建脚本
+        if: inputs.ksu_type == 'sukisu'
+        uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            scripts
+
       - name: 安装环境依赖+初始化源码仓库及llvm-clang19工具链
         run: |
           rm -rf kernel_workspace
