@@ -24,6 +24,14 @@ on:
           - 'bakasu'
           - 'sukisu'
           - 'none'
+      build_channel:
+        description: '构建通道（正式=官方 Release 发行版，最新=上游最新提交）'
+        required: false
+        type: choice
+        options:
+          - '正式 (Release)'
+          - '最新 (HEAD)'
+        default: '正式 (Release)'
       susfs_enable:
         description: '是否开启susfs(用于增强隐藏环境挂载功能; 可能轻微增加耗电，上游更新导致不稳定时或不需要可关闭)'
         required: true
@@ -99,7 +107,24 @@ on:
         default: ''
 
 jobs:
+  get-ksu-manager:
+    # ksu_type=none 时无管理器可拉取；构建作业照常运行，各变体跟随分支 HEAD
+    if: ${{ inputs.ksu_type != 'none' }}
+    uses: ./.github/workflows/get-manager.yml
+    secrets: inherit
+    with:
+      kernelsu_variant: ${{ inputs.ksu_type == 'finasu' && 'FinaSU' || inputs.ksu_type == 'bakasu' && 'BakaSU' || 'SukiSU' }}
+      build_channel: ${{ inputs.build_channel }}
+      cancel_susfs: ${{ !inputs.susfs_enable }}
+      use_bbg: ${{ inputs.baseband_guard }}
+      use_net_enhance: ${{ inputs.better_net }}
+      use_rekernel: ${{ inputs.rekernel_enable }}
+      use_kpm: ${{ inputs.kpm_enable && 'enabled (开启)' || 'disabled (关闭)' }}
+
   build:
+    needs: get-ksu-manager
+    # 管理器作业被跳过或失败时不阻塞构建；ksuCommit 为空时跟随各变体分支 HEAD
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     outputs:
       ksuver: ${{ steps.ksu_version.outputs.ksuver }}
@@ -263,6 +288,10 @@ jobs:
 
       - name: 添加KernelSU
         id: ksu_version
+        env:
+          KSU_PIN: ${{ needs.get-ksu-manager.outputs.ksuCommit }}
+          KSU_PIN_CERT_SIZE: ${{ needs.get-ksu-manager.outputs.managerCertSize }}
+          KSU_PIN_CERT_HASH: ${{ needs.get-ksu-manager.outputs.managerCertHash }}
         run: |
           # 进入内核工作目录
           cd kernel_workspace
@@ -270,6 +299,16 @@ jobs:
             echo "正在配置FinaSU..."
             git clone https://github.com/LyraVoid/FinaSU.git KernelSU
             cd KernelSU
+            # 对齐 get-manager 选定的提交：正式通道为 Release 标签提交，最新通道为管理器构建提交；
+            # Kbuild 以 30000 + git 提交数计算版本，与管理器 versionCode 同源同值
+            if [ -n "$KSU_PIN" ]; then
+              if ! git checkout -q --detach "$KSU_PIN" 2>/dev/null; then
+                git fetch -q origin "$KSU_PIN"
+                git checkout -q --detach "$KSU_PIN"
+              fi
+              [ "$(git rev-parse HEAD)" = "$KSU_PIN" ] || { echo "::error::KernelSU 检出管理器提交 $KSU_PIN 失败，无法对齐版本"; exit 1; }
+              echo "KernelSU 已检出到管理器构建提交 $KSU_PIN (KSU 版本 $((30000 + $(git rev-list --count HEAD))))"
+            fi
             KSU_VERSION=$(expr $(git rev-list --count HEAD) + 30000)
             echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
             echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
@@ -282,13 +321,20 @@ jobs:
               sed -i "/endmenu/i source \"drivers/kernelsu/Kconfig\"" "$DRIVER_DIR/Kconfig"
             fi
             # 将官方管理器签名证书写入第二信任槽，否则 FinaSU 管理器会显示“未安装”
-            wget -q https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/scripts/finasu_compat/extract_manager_cert.py -O /tmp/extract_manager_cert.py
-            REL_JSON=$(curl -s --fail --max-time 30 -H "Authorization: Bearer ${{ github.token }}" https://api.github.com/repos/LyraVoid/FinaSU/releases/latest)
-            REL_URL=$(printf '%s' "$REL_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(next(a['browser_download_url'] for a in d.get('assets',[]) if a['name'].endswith('.apk')))")
-            curl -sL --fail --retry 3 --max-time 300 -o /tmp/finasu-manager.apk "$REL_URL"
-            CERT_INFO=$(python3 /tmp/extract_manager_cert.py /tmp/finasu-manager.apk | head -n1)
-            KSU_CERT_SIZE=$(echo "$CERT_INFO" | awk '{print $1}')
-            KSU_CERT_HASH=$(echo "$CERT_INFO" | awk '{print $2}')
+            # 优先用 get-manager 从对应通道管理器提取的证书；拿不到时回退到最新 Release APK 现场提取
+            KSU_CERT_SIZE="$KSU_PIN_CERT_SIZE"
+            KSU_CERT_HASH="$KSU_PIN_CERT_HASH"
+            if [ -n "$KSU_CERT_SIZE" ] && [ -n "$KSU_CERT_HASH" ]; then
+              echo "使用 get-manager 提取的管理器签名证书: size=$KSU_CERT_SIZE sha256=$KSU_CERT_HASH"
+            else
+              wget -q https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/scripts/finasu_compat/extract_manager_cert.py -O /tmp/extract_manager_cert.py
+              REL_JSON=$(curl -s --fail --max-time 30 -H "Authorization: Bearer ${{ github.token }}" https://api.github.com/repos/LyraVoid/FinaSU/releases/latest)
+              REL_URL=$(printf '%s' "$REL_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(next(a['browser_download_url'] for a in d.get('assets',[]) if a['name'].endswith('.apk')))")
+              curl -sL --fail --retry 3 --max-time 300 -o /tmp/finasu-manager.apk "$REL_URL"
+              CERT_INFO=$(python3 /tmp/extract_manager_cert.py /tmp/finasu-manager.apk | head -n1)
+              KSU_CERT_SIZE=$(echo "$CERT_INFO" | awk '{print $1}')
+              KSU_CERT_HASH=$(echo "$CERT_INFO" | awk '{print $2}')
+            fi
             if [ -z "$KSU_CERT_SIZE" ] || [ -z "$KSU_CERT_HASH" ]; then
               echo "::error::FinaSU 管理器签名证书提取失败"
               exit 1
@@ -317,6 +363,16 @@ jobs:
             curl -LSs "https://raw.githubusercontent.com/Baka-SU/BakaSU/refs/heads/main/kernel/setup.sh" | bash -s main
             echo 'CONFIG_KSU_FULL_NAME_FORMAT="%TAG_NAME%-%COMMIT_SHA%@xuyi"' >> ./common/arch/arm64/configs/gki_defconfig
             cd ./KernelSU
+            # 对齐 get-manager 选定的提交：正式通道为 Release 标签提交，最新通道为管理器构建提交；
+            # Kbuild 以 30700 + git 提交数计算版本，与管理器 versionCode 同源同值
+            if [ -n "$KSU_PIN" ]; then
+              if ! git checkout -q --detach "$KSU_PIN" 2>/dev/null; then
+                git fetch -q origin "$KSU_PIN"
+                git checkout -q --detach "$KSU_PIN"
+              fi
+              [ "$(git rev-parse HEAD)" = "$KSU_PIN" ] || { echo "::error::KernelSU 检出管理器提交 $KSU_PIN 失败，无法对齐版本"; exit 1; }
+              echo "KernelSU 已检出到管理器构建提交 $KSU_PIN (KSU 版本 $((30700 + $(git rev-list --count HEAD))))"
+            fi
             # 与 BakaSU 内核侧版本号算法一致：30000 + 提交数 + 700
             KSU_VERSION=$(expr $(git rev-list --count HEAD) + 30700)
             echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
@@ -331,8 +387,32 @@ jobs:
             fi
             curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s "$SUKISU_BRANCH"
             cd ./KernelSU
-            # 与 SukiSU 内核侧算法一致：40000 + main 分支提交数 - 2815（官方管理器 versionCode 同源）
-            KSU_VERSION=$(expr $(git rev-list --count main) + 40000 - 2815)
+            # 对齐 get-manager 选定的提交：SukiSU 的 builtin 分支与 main 内容不同，不能直接检出，
+            # 改为把内核侧版本来源 REPO_BRANCH 改写为该提交（main 在 kernel/Kbuild，builtin 在 kernel/Makefile）
+            if [ -n "$KSU_PIN" ]; then
+              if ! git fetch -q origin "$KSU_PIN" 2>/dev/null; then
+                echo "管理器构建提交 $KSU_PIN 已存在于本地克隆，跳过 fetch"
+              fi
+              if ! git cat-file -e "$KSU_PIN^{commit}" 2>/dev/null; then
+                echo "::error::管理器构建提交 $KSU_PIN 不在 KernelSU 仓库中，无法对齐版本来源"
+                exit 1
+              fi
+              if [ "$SUKISU_BRANCH" = "builtin" ]; then
+                KSU_VERSION_SOURCE="kernel/Makefile"
+              else
+                KSU_VERSION_SOURCE="kernel/Kbuild"
+              fi
+              sed -i -E "s|^(REPO_BRANCH[[:space:]]*[:?+]?=)[[:space:]]*main[[:space:]]*\$|\1 $KSU_PIN|" "$KSU_VERSION_SOURCE"
+              grep -qE "^REPO_BRANCH[[:space:]]*[:?+]?=[[:space:]]*$KSU_PIN[[:space:]]*\$" "$KSU_VERSION_SOURCE" \
+                || { echo "::error::未能在 $KSU_VERSION_SOURCE 中对齐 REPO_BRANCH（上游结构可能已变化），无法对齐管理器版本"; exit 1; }
+              echo "SukiSU 内核侧版本来源已对齐管理器构建提交 $KSU_PIN (KSU 版本 $((40000 + $(git rev-list --count "$KSU_PIN") - 2815)))"
+            fi
+            # 与 SukiSU 内核侧算法一致：40000 + 提交数 - 2815（官方管理器 versionCode 同源）
+            if [ -n "$KSU_PIN" ]; then
+              KSU_VERSION=$(expr $(git rev-list --count "$KSU_PIN") + 40000 - 2815)
+            else
+              KSU_VERSION=$(expr $(git rev-list --count main) + 40000 - 2815)
+            fi
             echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
             echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
             cd ..
