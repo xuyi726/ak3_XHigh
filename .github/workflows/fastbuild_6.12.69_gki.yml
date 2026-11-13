@@ -110,6 +110,11 @@ jobs:
   get-ksu-manager:
     # ksu_type=none 时无管理器可拉取；构建作业照常运行，各变体跟随分支 HEAD
     if: ${{ inputs.ksu_type != 'none' }}
+    # get-manager 声明了 contents: write / actions: read，调用方必须显式授予更高或同等权限，
+    # 否则派发阶段直接 startup_failure（默认令牌为 contents: read / actions: none）
+    permissions:
+      actions: read
+      contents: write
     uses: ./.github/workflows/get-manager.yml
     secrets: inherit
     with:
