@@ -106,7 +106,7 @@ on:
         type: string
         default: ''
       build_time:
-        description: '自定义构建时间(留空=使用编译时的实际时间; 格式示例 Sun Dec  1 08:10:00 UTC 2026)'
+        description: '自定义构建时间(留空=内置默认 Mon Jul 20 18:34:35 UTC 2026; 自定义格式示例 Sun Dec  1 08:10:00 UTC 2026)'
         required: false
         type: string
         default: ''
@@ -140,6 +140,7 @@ jobs:
       ccache_debug: ${{ inputs.ccache_debug }}
       kernel_suffix: ${{ inputs.kernel_suffix }}
       droidspaces_mode: ${{ inputs.droidspaces_enable }}
+      build_time: ${{ inputs.build_time || '' }}
 
   build:
     needs: get-ksu-manager
@@ -792,54 +793,54 @@ jobs:
           INPUT_TIME: ${{ github.event.inputs.build_time }}
         run: |
           cd kernel_workspace
-          if [[ -n "$INPUT_TIME" && "$INPUT_TIME" != "N" && "$INPUT_TIME" != "n" ]]; then
-            # 去除首尾空白并压缩连续空格，统一为单空格分隔（兼容 Dec 03 / Dec 3 / Dec  3 三种写法）
-            INPUT_TIME="$(printf '%s' "$INPUT_TIME" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/[[:space:]][[:space:]]*/ /g')"
-
-            TIME_REGEX='^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) ( ?[1-9]|0[1-9]|[12][0-9]|3[01]) ([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9] UTC [0-9]{4}$'
-            if [[ ! "$INPUT_TIME" =~ $TIME_REGEX ]]; then
-              echo "::error title=构建时间格式错误::自定义构建时间必须形如 Sun Dec  1 08:10:00 UTC 2026，请删除多余前缀并使用两位日期。"
-              exit 1
-            fi
-
-            # 解析为标准 UTC 时间（可拒绝不存在的日期，如 2 月 30 日）
-            NORMALIZED_TIME="$(LC_ALL=C TZ=UTC date -u -d "$INPUT_TIME" +'%a %b %e %T UTC %Y' 2>/dev/null || true)"
-            if [[ -z "$NORMALIZED_TIME" ]]; then
-              echo "::error title=构建时间无效::自定义构建时间无法解析为真实 UTC 时间。"
-              exit 1
-            fi
-
-            # GNU date 会忽略输入中的星期字段，因此去掉星期后单独解析出真实星期再比对
-            TYPED_WD="${INPUT_TIME%% *}"
-            REAL_WD="$(LC_ALL=C TZ=UTC date -u -d "${INPUT_TIME#* }" +%a 2>/dev/null || true)"
-            if [[ -z "$REAL_WD" || "$TYPED_WD" != "$REAL_WD" ]]; then
-              echo "::error title=星期与日期不匹配::输入的星期与日期不一致，实际应为 ${REAL_WD:-未知}（参考：$NORMALIZED_TIME）。"
-              exit 1
-            fi
-
-            DATESTR="$NORMALIZED_TIME"
-            echo "KBUILD_BUILD_TIMESTAMP=$DATESTR" >> "$GITHUB_ENV"
-            echo "KBUILD_BUILD_VERSION=1" >> "$GITHUB_ENV"
-            echo "BUILD_TIME_LOG=$(LC_ALL=C TZ=UTC date -u -d "$DATESTR" +'%Y-%m-%d %H:%M:%S UTC')" >> "$GITHUB_ENV"
-
-            # 编译器侧的 faketime 同步指向该日期，__DATE__/__TIME__ 与 UTS 日期保持一致
-            FAKE_DATE="$(LC_ALL=C TZ=UTC date -u -d "$DATESTR" +'%Y-%m-%d')"
-            echo "FAKESTAT=$FAKE_DATE 12:00:00" >> "$GITHUB_ENV"
-            echo "FAKETIME=@$FAKE_DATE 13:00:00" >> "$GITHUB_ENV"
-
-            # 6.12 走 6.x mkcompile_h 补丁，把 UTS_VERSION 固定为该时间
-            f=./common/scripts/mkcompile_h
-            if [ -f "$f" ]; then
-              if grep -q 'UTS_VERSION=' "$f"; then
-                perl -pi -e "s{UTS_VERSION=\"\\\$\\\(.*?\\\)\"}{UTS_VERSION=\"#1 SMP PREEMPT $DATESTR\"}" "$f"
-              else
-                perl -0777 -pi -e "s{cat <<EOF}{cat <<EOF\n#undef UTS_VERSION\n#define UTS_VERSION \"#1 SMP PREEMPT $DATESTR\" } unless /UTS_VERSION/" "$f"
-              fi
-            fi
-            echo "使用自定义构建时间: $DATESTR"
-          else
-            echo "未指定自定义构建时间，使用编译时的实际时间"
+          # 留空（或填 N）时使用内置默认时间，保证不同次构建的日期一致
+          if [[ -z "$INPUT_TIME" || "$INPUT_TIME" == "N" || "$INPUT_TIME" == "n" ]]; then
+            INPUT_TIME="Mon Jul 20 18:34:35 UTC 2026"
           fi
+          # 去除首尾空白并压缩连续空格，统一为单空格分隔（兼容 Dec 03 / Dec 3 / Dec  3 三种写法）
+          INPUT_TIME="$(printf '%s' "$INPUT_TIME" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/[[:space:]][[:space:]]*/ /g')"
+
+          TIME_REGEX='^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) ( ?[1-9]|0[1-9]|[12][0-9]|3[01]) ([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9] UTC [0-9]{4}$'
+          if [[ ! "$INPUT_TIME" =~ $TIME_REGEX ]]; then
+            echo "::error title=构建时间格式错误::自定义构建时间必须形如 Sun Dec  1 08:10:00 UTC 2026，请删除多余前缀并使用两位日期。"
+            exit 1
+          fi
+
+          # 解析为标准 UTC 时间（可拒绝不存在的日期，如 2 月 30 日）
+          NORMALIZED_TIME="$(LC_ALL=C TZ=UTC date -u -d "$INPUT_TIME" +'%a %b %e %T UTC %Y' 2>/dev/null || true)"
+          if [[ -z "$NORMALIZED_TIME" ]]; then
+            echo "::error title=构建时间无效::自定义构建时间无法解析为真实 UTC 时间。"
+            exit 1
+          fi
+
+          # GNU date 会忽略输入中的星期字段，因此去掉星期后单独解析出真实星期再比对
+          TYPED_WD="${INPUT_TIME%% *}"
+          REAL_WD="$(LC_ALL=C TZ=UTC date -u -d "${INPUT_TIME#* }" +%a 2>/dev/null || true)"
+          if [[ -z "$REAL_WD" || "$TYPED_WD" != "$REAL_WD" ]]; then
+            echo "::error title=星期与日期不匹配::输入的星期与日期不一致，实际应为 ${REAL_WD:-未知}（参考：$NORMALIZED_TIME）。"
+            exit 1
+          fi
+
+          DATESTR="$NORMALIZED_TIME"
+          echo "KBUILD_BUILD_TIMESTAMP=$DATESTR" >> "$GITHUB_ENV"
+          echo "KBUILD_BUILD_VERSION=1" >> "$GITHUB_ENV"
+          echo "BUILD_TIME_LOG=$(LC_ALL=C TZ=UTC date -u -d "$DATESTR" +'%Y-%m-%d %H:%M:%S UTC')" >> "$GITHUB_ENV"
+
+          # 编译器侧的 faketime 同步指向该日期，__DATE__/__TIME__ 与 UTS 日期保持一致
+          FAKE_DATE="$(LC_ALL=C TZ=UTC date -u -d "$DATESTR" +'%Y-%m-%d')"
+          echo "FAKESTAT=$FAKE_DATE 12:00:00" >> "$GITHUB_ENV"
+          echo "FAKETIME=@$FAKE_DATE 13:00:00" >> "$GITHUB_ENV"
+
+          # 6.12 走 6.x mkcompile_h 补丁，把 UTS_VERSION 固定为该时间
+          f=./common/scripts/mkcompile_h
+          if [ -f "$f" ]; then
+            if grep -q 'UTS_VERSION=' "$f"; then
+              perl -pi -e "s{UTS_VERSION=\"\\\$\\\(.*?\\\)\"}{UTS_VERSION=\"#1 SMP PREEMPT $DATESTR\"}" "$f"
+            else
+              perl -0777 -pi -e "s{cat <<EOF}{cat <<EOF\n#undef UTS_VERSION\n#define UTS_VERSION \"#1 SMP PREEMPT $DATESTR\" } unless /UTS_VERSION/" "$f"
+            fi
+          fi
+          echo "使用构建时间: $DATESTR"
 
       - name: 构建内核
         run: |
@@ -874,8 +875,8 @@ jobs:
           wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/lib/libfakestat.so
           wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/lib/libfaketimeMT.so
           chmod 777 ./*.so
-          export FAKESTAT="${FAKESTAT:-2025-05-25 12:00:00}"
-          export FAKETIME="${FAKETIME:-@2025-05-25 13:00:00}"
+          export FAKESTAT="${FAKESTAT:-2026-07-20 12:00:00}"
+          export FAKETIME="${FAKETIME:-@2026-07-20 13:00:00}"
           echo "FAKESTAT=$FAKESTAT" >> $GITHUB_ENV
           echo "FAKETIME=$FAKETIME" >> $GITHUB_ENV
           SO_DIR=$(pwd)

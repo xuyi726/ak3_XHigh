@@ -868,6 +868,8 @@ jobs:
           esac
           SUFFIX_ROW="${{ inputs.kernel_suffix }}"
           [ -n "$SUFFIX_ROW" ] || SUFFIX_ROW="默认"
+          FB_TIME_ROW="${{ inputs.build_time }}"
+          [ -n "$FB_TIME_ROW" ] || FB_TIME_ROW="内置默认（Mon Jul 20 18:34:35 UTC 2026）"
           if [ "$PROFILE" = "fastbuild" ] && [ "$VARIANT" != "SukiSU" ]; then
             case "$KPM_ROW" in
               *关闭*) : ;;
@@ -898,6 +900,7 @@ jobs:
               echo "| ccache 缓存更新 | $(flag "${{ inputs.ccache_update }}") |"
               echo "| ccache 调试日志 | $(flag "${{ inputs.ccache_debug }}") |"
               echo "| 内核后缀 | $SUFFIX_ROW |"
+              echo "| 自定义构建时间 | $FB_TIME_ROW |"
             else
               echo "| SUSFS | $SUS_ROW |"
               echo "| Droidspaces 容器 | $DS_ROW |"
