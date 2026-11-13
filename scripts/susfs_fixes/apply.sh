@@ -220,6 +220,49 @@ if [[ -f mm/rmap.c.rej ]] && grep -q 'tlb_gather_mmu_vma' mm/rmap.c; then
   rm -f mm/rmap.c.rej
 fi
 
+# 3) fs/proc/task_mmu.c：2026-03 起的 AOSP 6.12 把 show_smaps_rollup 改成了
+#    VMA_ITERATOR + do/for_each_vma 结构，v2.4.0 主补丁按旧结构写的两个 hunk
+#    （SUS_MAP 检查与 bypass_orig_flow 标签）必然失配；按 cctv18 oki 补丁对同一棵
+#    树的写法补齐，补完删掉 .rej。结构对不上时保留 .rej 交给后面的计数告警。
+task_mmu_sus_map_rollup_compat() {
+  [[ -f fs/proc/task_mmu.c && -f fs/proc/task_mmu.c.rej ]] || return 0
+  if perl -0777 -i -pe '
+    my $nl = /\r\n/ ? "\r\n" : "\n";
+    my $n1 = ($_ =~ s{
+      (\tvma_start\s*=\s*vma->vm_start;\r?\n\tdo\s*\{\r?\n)
+      (\t\tsmap_gather_stats\(vma,\s*&mss,\s*0\);\r?\n)
+    }{
+      $1
+      . "#ifdef CONFIG_KSU_SUSFS_SUS_MAP$nl\t\tif (vma->vm_file && SUSFS_IS_INODE_SUS_MAP(file_inode(vma->vm_file)))$nl\t\t\tgoto bypass_orig_flow;$nl#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MAP$nl"
+      . $2
+      . "#ifdef CONFIG_KSU_SUSFS_SUS_MAP$nl"
+      . "bypass_orig_flow:$nl"
+      . "#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MAP$nl"
+    }msex);
+    my $n2 = ($_ =~ s{
+      (\t\t\t\/\*[ ]Case[ ]4[ ]above[ ]\*\/\r?\n\t\t\tif[ ]\(vma->vm_end[ ]>[ ]last_vma_end\)[ ]\{\r?\n)
+      (\t\t\t\tsmap_gather_stats\(vma,\s*&mss,\s*last_vma_end\);\r?\n\t\t\t\tlast_vma_end\s*=\s*vma->vm_end;\r?\n)
+    }{
+      $1
+      . "#ifdef CONFIG_KSU_SUSFS_SUS_MAP$nl"
+      . "\t\t\t\tif (!vma->vm_file || !(SUSFS_IS_INODE_SUS_MAP(file_inode(vma->vm_file)))) {$nl"
+      . "\t\t\t\t\tsmap_gather_stats(vma, &mss, last_vma_end);$nl"
+      . "\t\t\t\t\tlast_vma_end = vma->vm_end;$nl"
+      . "\t\t\t\t}$nl"
+      . "#else$nl"
+      . $2
+      . "#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MAP$nl"
+    }msex);
+    die "task_mmu.c show_smaps_rollup 结构不匹配（n1=$n1 n2=$n2）\n" unless $n1 == 1 && $n2 == 1;
+  ' fs/proc/task_mmu.c 2>/dev/null; then
+    rm -f fs/proc/task_mmu.c.rej
+    echo "SUSFS task_mmu.c 兼容：已按 VMA_ITERATOR 结构补齐 show_smaps_rollup 的 SUS_MAP 处理"
+  else
+    echo "::warning title=SUSFS 兼容::task_mmu.c 的 show_smaps_rollup 结构不匹配，保留 .rej"
+  fi
+}
+task_mmu_sus_map_rollup_compat
+
 # 为尚未提供 SU 会话 FD 接口的 SukiSU/BakaSU 恢复旧版 exec hook 行为
 EXEC_HELPER=""
 if [[ "$KSU_VARIANT" == SukiSU* || "$KSU_VARIANT" == "BakaSU" || "$KSU_VARIANT" == "ReSukiSU" ]]; then
