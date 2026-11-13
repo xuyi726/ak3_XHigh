@@ -120,11 +120,21 @@ jobs:
     with:
       kernelsu_variant: ${{ inputs.ksu_type == 'finasu' && 'FinaSU' || inputs.ksu_type == 'bakasu' && 'BakaSU' || 'SukiSU' }}
       build_channel: ${{ inputs.build_channel }}
+      # 本工作流选项集与通用内核工作流不同，构建总结按 fastbuild 档案渲染
+      summary_profile: fastbuild
       cancel_susfs: ${{ !inputs.susfs_enable }}
       use_bbg: ${{ inputs.baseband_guard }}
       use_net_enhance: ${{ inputs.better_net }}
       use_rekernel: ${{ inputs.rekernel_enable }}
       use_kpm: ${{ inputs.kpm_enable && 'enabled (开启)' || 'disabled (关闭)' }}
+      use_lz4: ${{ inputs.lz4_enable }}
+      use_lz4kd: ${{ inputs.lz4kd_enable }}
+      bbr_mode: ${{ inputs.bbr_enable }}
+      use_adios: ${{ inputs.adios_enable }}
+      ccache_update: ${{ inputs.ccache_update }}
+      ccache_debug: ${{ inputs.ccache_debug }}
+      kernel_suffix: ${{ inputs.kernel_suffix }}
+      droidspaces_mode: ${{ inputs.droidspaces_enable }}
 
   build:
     needs: get-ksu-manager
