@@ -57,6 +57,46 @@ on:
         required: false
         type: boolean
         default: false
+      summary_profile:
+        description: "构建总结档案：kernel=通用内核工作流；fastbuild=6.12.69 快速构建（选项集不同）"
+        required: false
+        type: string
+        default: "kernel"
+      use_lz4:
+        required: false
+        type: boolean
+        default: false
+      use_lz4kd:
+        required: false
+        type: boolean
+        default: false
+      bbr_mode:
+        description: "BBR 模式（false/true/default 选项串，仅用于构建总结展示）"
+        required: false
+        type: string
+        default: "false"
+      use_adios:
+        required: false
+        type: boolean
+        default: false
+      ccache_update:
+        required: false
+        type: boolean
+        default: false
+      ccache_debug:
+        required: false
+        type: boolean
+        default: false
+      kernel_suffix:
+        description: "内核后缀（仅用于构建总结展示）"
+        required: false
+        type: string
+        default: ""
+      droidspaces_mode:
+        description: "Droidspaces 模式（false/standard/extend，仅用于构建总结展示）"
+        required: false
+        type: string
+        default: "false"
       artifact_upload_mode:
         required: false
         type: string
@@ -814,6 +854,27 @@ jobs:
           TIME_ROW="${{ inputs.build_time }}"
           [ -n "$TIME_ROW" ] || TIME_ROW="自动（当前北京时间）"
 
+          # fastbuild 档案：该工作流的选项集与通用内核工作流不同，单独成表
+          PROFILE="${{ inputs.summary_profile }}"
+          case "${{ inputs.droidspaces_mode }}" in
+            standard) DS_MODE_ROW="✅ 开启（含 NTSync）" ;;
+            extend)   DS_MODE_ROW="✅ 开启（扩展测试项）" ;;
+            *)        DS_MODE_ROW="➖ 关闭" ;;
+          esac
+          case "${{ inputs.bbr_mode }}" in
+            true)    BBR_ROW="✅ 编入算法" ;;
+            default) BBR_ROW="✅ 编入并设为默认" ;;
+            *)       BBR_ROW="➖ 关闭" ;;
+          esac
+          SUFFIX_ROW="${{ inputs.kernel_suffix }}"
+          [ -n "$SUFFIX_ROW" ] || SUFFIX_ROW="默认"
+          if [ "$PROFILE" = "fastbuild" ] && [ "$VARIANT" != "SukiSU" ]; then
+            case "$KPM_ROW" in
+              *关闭*) : ;;
+              *) KPM_ROW="$KPM_ROW（仅 SukiSU 生效）" ;;
+            esac
+          fi
+
           {
             echo "## 构建总结"
             echo ""
@@ -823,18 +884,34 @@ jobs:
             echo ""
             echo "| 功能 | 选择 |"
             echo "|:---|:---|"
-            echo "| SUSFS | $SUS_ROW |"
-            echo "| Droidspaces 容器 | $DS_ROW |"
-            echo "| ZRAM 压缩 | $(flag "${{ inputs.use_zram }}") |"
-            echo "| BBG 基带保护 | $(flag "${{ inputs.use_bbg }}") |"
-            echo "| 网络增强 | $(flag "${{ inputs.use_net_enhance }}") |"
-            echo "| Re-Kernel 驱动 | $(flag "${{ inputs.use_rekernel }}") |"
-            echo "| KPM | $KPM_ROW |"
-            echo "| \`CVE-2026-43499\` 修复 | $(flag "${{ inputs.cve_2026_43499_patch }}") |"
-            echo "| 兼容跳过 | $(flag "${{ inputs.skip_incompatible }}") |"
-            echo "| 产物上传模式 | ${{ inputs.artifact_upload_mode }} |"
-            echo "| 自定义版本名 | ${VER_ROW} |"
-            echo "| 自定义构建时间 | ${TIME_ROW} |"
+            if [ "$PROFILE" = "fastbuild" ]; then
+              echo "| SUSFS | $SUS_ROW |"
+              echo "| KPM | $KPM_ROW |"
+              echo "| Droidspaces 容器 | $DS_MODE_ROW |"
+              echo "| LZ4 + zstd 补丁 | $(flag "${{ inputs.use_lz4 }}") |"
+              echo "| LZ4KD 补丁 | $(flag "${{ inputs.use_lz4kd }}") |"
+              echo "| BBR 算法 | $BBR_ROW |"
+              echo "| 网络功能拓展 | $(flag "${{ inputs.use_net_enhance }}") |"
+              echo "| ADIOS IO 调度器 | $(flag "${{ inputs.use_adios }}") |"
+              echo "| Re-Kernel | $(flag "${{ inputs.use_rekernel }}") |"
+              echo "| 内核级基带保护 | $(flag "${{ inputs.use_bbg }}") |"
+              echo "| ccache 缓存更新 | $(flag "${{ inputs.ccache_update }}") |"
+              echo "| ccache 调试日志 | $(flag "${{ inputs.ccache_debug }}") |"
+              echo "| 内核后缀 | $SUFFIX_ROW |"
+            else
+              echo "| SUSFS | $SUS_ROW |"
+              echo "| Droidspaces 容器 | $DS_ROW |"
+              echo "| ZRAM 压缩 | $(flag "${{ inputs.use_zram }}") |"
+              echo "| BBG 基带保护 | $(flag "${{ inputs.use_bbg }}") |"
+              echo "| 网络增强 | $(flag "${{ inputs.use_net_enhance }}") |"
+              echo "| Re-Kernel 驱动 | $(flag "${{ inputs.use_rekernel }}") |"
+              echo "| KPM | $KPM_ROW |"
+              echo "| \`CVE-2026-43499\` 修复 | $(flag "${{ inputs.cve_2026_43499_patch }}") |"
+              echo "| 兼容跳过 | $(flag "${{ inputs.skip_incompatible }}") |"
+              echo "| 产物上传模式 | ${{ inputs.artifact_upload_mode }} |"
+              echo "| 自定义版本名 | ${VER_ROW} |"
+              echo "| 自定义构建时间 | ${TIME_ROW} |"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: 上传APK
