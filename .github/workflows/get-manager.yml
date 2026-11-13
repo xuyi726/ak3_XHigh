@@ -815,11 +815,11 @@ jobs:
           [ -n "$TIME_ROW" ] || TIME_ROW="自动（当前北京时间）"
 
           {
-            echo "## 📊 构建总结"
+            echo "## 构建总结"
             echo ""
             echo "**$VARIANT** · 管理器 \`$MANAGER_VER\` · $CH_LABEL"
             echo ""
-            echo "### ⚙️ 构建选项"
+            echo "### 构建选项"
             echo ""
             echo "| 功能 | 选择 |"
             echo "|:---|:---|"
