@@ -157,11 +157,6 @@ jobs:
       # 输出6/7: FinaSU 管理器签名证书（内核第二信任槽对齐用）
       managerCertSize: ${{ steps.add_KSU.outputs.managerCertSize }}
       managerCertHash: ${{ steps.add_KSU.outputs.managerCertHash }}
-    env:
-      CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
-      CCACHE_NOHASHDIR: "true"
-      CCACHE_HARDLINK: "true"
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
       - name: 检出脚本仓库
@@ -222,7 +217,6 @@ jobs:
       # 最新：管理器取与默认分支 HEAD 版本一致的最新构建（不限分支），内核锁定该 HEAD；
       #       BakaSU/FinaSU 直接取 build-manager.yml 最新构建，内核锁定该构建提交
       - name: 选择管理器来源（构建通道）
-        id: channel
         run: |
 
           CHANNEL_RAW="${{ inputs.build_channel }}"
@@ -463,14 +457,9 @@ jobs:
             echo "managerVer=$MANAGER_VERSION" >> $GITHUB_OUTPUT
             echo "managerCertSize=$CERT_SIZE" >> $GITHUB_OUTPUT
             echo "managerCertHash=$CERT_HASH" >> $GITHUB_OUTPUT
-            # 最新：锁定 master HEAD（内核按该提交构建）；正式：锁定 Release 标签提交
-            if [ "${PIN_MODE:-pin}" = "head" ]; then
-              FINASU_REF=$(git -C KernelSU rev-parse "origin/master^{commit}" 2>/dev/null \
-                || git ls-remote https://github.com/LyraVoid/FinaSU.git refs/heads/master 2>/dev/null | awk '{print $1}')
-            else
-              FINASU_REF=$(git -C KernelSU rev-parse "${REL_TAG}^{commit}" 2>/dev/null \
-                || git ls-remote https://github.com/LyraVoid/FinaSU.git "refs/tags/${REL_TAG}^{}" 2>/dev/null | awk '{print $1}')
-            fi
+            # 正式通道：锁定 Release 标签提交
+            FINASU_REF=$(git -C KernelSU rev-parse "${REL_TAG}^{commit}" 2>/dev/null \
+              || git ls-remote https://github.com/LyraVoid/FinaSU.git "refs/tags/${REL_TAG}^{}" 2>/dev/null | awk '{print $1}')
             echo "内核锁定提交: ${FINASU_REF:0:8}"
             echo "ksuCommit=$FINASU_REF" >> $GITHUB_OUTPUT
             exit 0
@@ -809,10 +798,6 @@ jobs:
           mkdir -p susfs-module
           mv "$NAME" "susfs-module/$NAME"
           ls -la susfs-module/
-
-      - name: Notify on failure
-        if: steps.add_KSU.outcome == 'failure'
-        run: echo "下载CI构建的KSU失败!"
 
       - name: 构建总结
         if: always()

@@ -147,9 +147,6 @@ jobs:
     # 管理器作业被跳过或失败时不阻塞构建；ksuCommit 为空时跟随各变体分支 HEAD
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
-    outputs:
-      ksuver: ${{ steps.ksu_version.outputs.ksuver }}
-      ak3name: ${{ steps.create_zip.outputs.ak3name }}
     permissions:
       actions: write
       contents: read
@@ -177,8 +174,6 @@ jobs:
           sudo rm -rf /var/lib/man-db/auto-update &&
           sudo apt update &&
           sudo apt-get install -y --no-install-recommends binutils python-is-python3 libssl-dev libelf-dev libdw-dev &
-          #旧版完整指令：（由于经过验证大部分指令已内置于GitHub Action环境中，故进行精简）
-          #sudo apt-get install -y --no-install-recommends curl bison flex make binutils git perl gcc python3 python-is-python3 bc libssl-dev libelf-dev libdw-dev zip unzip ccache
           
           #使用最新版ccache v4.12.2（Ubuntu软件仓库的版本并非最新）
           wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/lib/ccache-x86-64 -O ccache &&
@@ -308,7 +303,6 @@ jobs:
           fi
 
       - name: 添加KernelSU
-        id: ksu_version
         env:
           KSU_PIN: ${{ needs.get-ksu-manager.outputs.ksuCommit }}
           KSU_PIN_CERT_SIZE: ${{ needs.get-ksu-manager.outputs.managerCertSize }}
@@ -332,7 +326,6 @@ jobs:
             fi
             KSU_VERSION=$(expr $(git rev-list --count HEAD) + 30000)
             echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
-            echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
             cd ..
             # FinaSU 自带的 kernel/setup.sh 仍会克隆上游 tiann/KernelSU，这里手动完成树内集成
             DRIVER_DIR="$(pwd)/common/drivers"
@@ -397,7 +390,6 @@ jobs:
             # 与 BakaSU 内核侧版本号算法一致：30000 + 提交数 + 700
             KSU_VERSION=$(expr $(git rev-list --count HEAD) + 30700)
             echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
-            echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
           elif [[ ${{ github.event.inputs.ksu_type }} == "sukisu" ]]; then
             echo "正在配置SukiSU..."
             # 开启 SUSFS 时用 builtin 分支（内建 SUSFS 支持与 Inline hook），关闭时用 main
@@ -435,7 +427,6 @@ jobs:
               KSU_VERSION=$(expr $(git rev-list --count main) + 40000 - 2815)
             fi
             echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
-            echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
             cd ..
             # 内核完整版本的 @<branch> 固定为品牌名（CI 检出非 main 分支时管理器显示 @xuyi）
             bash "$GITHUB_WORKSPACE/scripts/ksu_post_setup.sh" KernelSU sukisu
@@ -613,10 +604,6 @@ jobs:
           # 6.12内核Rust配置
           echo "CONFIG_RUST=y" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_ANDROID_BINDER_IPC_RUST=m" >> ./common/arch/arm64/configs/gki_defconfig
-          # 应用 CVE_2026_43499 修复补丁（新版内核源码已应用补丁，无需再应用）
-          # cd common
-          # wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/cve-2026-43499-rtmutex-6.12.patch
-          # patch -p1 -F 3 < cve-2026-43499-rtmutex-6.12.patch
           
       - name: 启用网络功能增强优化配置
         if: inputs.better_net
@@ -720,12 +707,6 @@ jobs:
             echo "CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y" >> ./arch/arm64/configs/gki_defconfig
             echo "CONFIG_NETFILTER_XT_TARGET_LOG=y" >> ./arch/arm64/configs/gki_defconfig
             echo "CONFIG_NETFILTER_XT_MATCH_RECENT=y" >> ./arch/arm64/configs/gki_defconfig
-            # 未经测试的配置选项，可能导致bug
-            #echo "CONFIG_CGROUP_DEVICE=y" >> ./arch/arm64/configs/gki_defconfig
-            #echo "CONFIG_CGROUP_PIDS=y" >> ./arch/arm64/configs/gki_defconfig
-            #echo "CONFIG_FW_LOADER_COMPRESS=y" >> ./arch/arm64/configs/gki_defconfig
-            #echo "CONFIG_BRIDGE_NETFILTER=y" >> ./arch/arm64/configs/gki_defconfig
-            #echo "CONFIG_NF_TABLES=y" >> ./arch/arm64/configs/gki_defconfig
             # 开启 NTSync
             echo "CONFIG_NTSYNC=y" >> ./arch/arm64/configs/gki_defconfig
             if [[ "${{ github.event.inputs.droidspaces_enable }}" == "extend" ]]; then
@@ -734,10 +715,6 @@ jobs:
               echo "CONFIG_BT_HCIVHCI=y" >> ./arch/arm64/configs/gki_defconfig
               # 开启 systemd-coredump 支持
               echo "CONFIG_STATIC_USERMODEHELPER=n" >> ./arch/arm64/configs/gki_defconfig
-              # 添加 Lindroid EVDI DRM 驱动
-              # wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/${{ env.KERNEL_VERSION }}/droidspaces_patch/evdi_drm.patch
-              # patch -p1 -F 3 < evdi_drm.patch || true
-              # echo "CONFIG_DRM_LINDROID_EVDI=y" >> ./arch/arm64/configs/gki_defconfig
             fi
           fi
 
@@ -773,15 +750,11 @@ jobs:
           echo "替换内核版本后缀..."
           if [[ -n "${{ github.event.inputs.kernel_suffix }}" ]]; then
             echo "当前内核版本后缀：${{ github.event.inputs.kernel_suffix }}"
-            for f in ./common/scripts/setlocalversion; do
-              sed -i "\$s|echo \"\\\$res\"|echo \"-${{ github.event.inputs.kernel_suffix }}\"|" "$f"
-            done
+            sed -i "\$s|echo \"\\\$res\"|echo \"-${{ github.event.inputs.kernel_suffix }}\"|" ./common/scripts/setlocalversion
             sudo sed -i 's/-4k/-${{ github.event.inputs.KERNEL_SUFFIX }}/g' ./common/arch/arm64/configs/gki_defconfig
           else
             echo "当前内核版本后缀：${{ env.KERNEL_NAME }}"
-            for f in ./common/scripts/setlocalversion; do
-              sed -i "\$s|echo \"\\\$res\"|echo \"-${{ env.KERNEL_NAME }}\"|" "$f"
-            done
+            sed -i "\$s|echo \"\\\$res\"|echo \"-${{ env.KERNEL_NAME }}\"|" ./common/scripts/setlocalversion
             sudo sed -i 's/-4k/-${{ env.KERNEL_NAME }}/g' ./common/arch/arm64/configs/gki_defconfig
           fi
           sed -i 's/${scm_version}//' ./common/scripts/setlocalversion
@@ -996,7 +969,6 @@ jobs:
           key: ${{ env.CCACHE_REAL_KEY }}-${{ runner.os }}-${{ github.ref_name }}
          
       - name: 克隆 AnyKernel3 并打包
-        id: create_zip
         run: |
           cd kernel_workspace
           git clone https://github.com/cctv18/AnyKernel3 --depth=1
@@ -1012,11 +984,9 @@ jobs:
           fi
           AK3_ZIP="${AK3_NAME}-AnyKernel3.zip"
           zip -r "../$AK3_ZIP" ./*
-          echo "ak3name=$AK3_ZIP" >> $GITHUB_OUTPUT
           
           #为AK3添加注释（调试信息）
           CLEAN_SUB_VERSION="${{ env.SUB_VERSION }}"
-          CLEAN_SUB_VERSION="${CLEAN_SUB_VERSION%_mtk}"
           if [[ -n "${{ github.event.inputs.kernel_suffix }}" ]]; then
             FULL_VERSION=${{ env.KERNEL_VERSION }}.${CLEAN_SUB_VERSION}-${{ github.event.inputs.kernel_suffix }}
           else
