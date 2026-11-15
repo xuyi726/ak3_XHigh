@@ -463,7 +463,7 @@ jobs:
           cd kernel_workspace
           # builtin 与官方 main 的 UAPI 需对齐，否则管理器首页会提示"需要更新内核"
           bash "$GITHUB_WORKSPACE/scripts/ksu_uapi_sync/sync_uapi.sh" KernelSU
-          # 6.8+ security_add_hooks 新签名 / builtin 的 seccomp 过滤模式（内容检测，上游已修复则自动跳过）
+          # 6.8+ security_add_hooks 新签名 / builtin 的 seccomp 过滤模式 / 6.12 LSM static call 槽位（内容检测，上游已修复则自动跳过）
           bash "$GITHUB_WORKSPACE/scripts/sukisu_compat/apply.sh" KernelSU
 
       - name: 应用 KernelSU & SUSFS 补丁
