@@ -26,6 +26,34 @@ if [[ ! "$CURRENT_SUB" =~ ^[0-9]+$ ]]; then
   CURRENT_SUB=99999
 fi
 
+# ---- susfs4ksu R28 getpriority/priority uid filter 开关归一化 ----
+# 该特性整套代码（含 susfs_switch_to_ksu_domain / susfs_restore_creds 两个辅助
+# 函数）以 CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER 为开关，但 SukiSU(builtin)、
+# BakaSU、FinaSU 的原生驱动 Kconfig 均未定义该选项，同时 SukiSU 驱动的
+# supercall 分发（CMD_SUSFS_SET_PRIORITY_UID_FILTER）与 pkg_observer 无条件调用
+# susfs_set_priority_uid_filter / susfs_parse_priority_app_strings，于是：
+#   - susfs.c 的两个辅助函数失去唯一调用方，clang -Werror,-Wunused-function
+#     直接中断编译（FinaSU/BakaSU/SukiSU 三个变体均复现）；
+#   - susfs.h 中的声明被裁掉，SukiSU 驱动侧报 -Wimplicit-function-declaration。
+# 把开关上提到 CONFIG_KSU_SUSFS（启用 SUSFS 时恒为 y）使特性完整可用。
+# 仅改写预处理指令行：susfs.c 里 copy_config_to_buf() 的
+# "CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER\n" 字符串字面量保持原样，管理器
+# 仍能按原名识别该特性。
+normalize_priority_uid_filter_guard() {
+  local f
+  # 主补丁中的 +#ifdef/+#endif 行（不触碰上下文行，hunk 行数不变，可正常应用）
+  [[ -f "$SUSFS_PATCH" ]] \
+    && sed -i -E '/^[+ ]*#[[:space:]]*(ifdef|ifndef|endif).*CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER/ s/CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER/CONFIG_KSU_SUSFS/' "$SUSFS_PATCH"
+  # 已拷贝进内核树的源码与头文件
+  for f in fs/susfs.c include/linux/susfs.h; do
+    [[ -f "$f" ]] || continue
+    sed -i -E '/^#[[:space:]]*(ifdef|ifndef|endif).*CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER/ s/CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER/CONFIG_KSU_SUSFS/' "$f"
+  done
+}
+
+normalize_priority_uid_filter_guard
+echo "已把 PRIORITY_UID_FILTER 开关归一化为 CONFIG_KSU_SUSFS"
+
 # 兼容缺少 VMA padding 接口的 5.10.66～209、5.15.74～144 和 6.1.25～68
 if grep -qF 'VMA_PAD_START(vma)' "$SUSFS_PATCH" \
   && ! grep -Rqs 'VMA_PAD_START' ./include/linux; then
@@ -163,13 +191,6 @@ if [[ "$ANDROID_VERSION" == "android15" && "$KERNEL_VERSION" == "6.6" ]]; then
   fi
 fi
 
-if [[ "$ANDROID_VERSION" == "android16" && "$KERNEL_VERSION" == "6.12" ]]; then
-  if [[ "$CURRENT_SUB" -ge 58 ]]; then
-    echo "临时调整 Android 16 6.12 exec.c 上下文"
-    sed -i '/^#include <linux\/dma-buf.h>$/d' fs/exec.c
-  fi
-fi
-
 # 新版内核在 super.c 的 internal.h 之后新增了 trace/hooks/fs.h，
 # 旧版 SUSFS 主补丁以 thaw_super_locked 为上下文插入 extern 声明，会整段被拒绝；
 # 上游 2026-09-15 起已把声明挪到 unnamed_dev_ida 之后，不再依赖这段上下文，
@@ -199,21 +220,48 @@ if [[ -f mm/rmap.c.rej ]] && grep -q 'tlb_gather_mmu_vma' mm/rmap.c; then
   rm -f mm/rmap.c.rej
 fi
 
-# 3) fs/proc/task_mmu.c（6.12.69+）：show_smap 重构（vma_pages → vma_data_pages）
-#    导致 SUS_MAP 检查 hunk 上下文失配被拒，属于真实缺失，手工补回
-if [[ -f fs/proc/task_mmu.c.rej ]] \
-  && grep -qF 'static int show_smap(struct seq_file *m, void *v)' fs/proc/task_mmu.c; then
-  SHOW_SMAP_BODY="$(sed -n '/^static int show_smap(struct seq_file \*m, void \*v)/,/^}/p' fs/proc/task_mmu.c)"
-  if [[ -n "$SHOW_SMAP_BODY" ]] && ! grep -qF 'SUSFS_IS_INODE_SUS_MAP' <<< "$SHOW_SMAP_BODY"; then
-    echo "为 show_smap 手工补入 SUS_MAP 检查（6.12.69+ 上下文漂移）"
-    perl -0pi -e 's/(static int show_smap\(struct seq_file \*m, void \*v\)\n\{\n\tstruct vm_area_struct \*vma = v;\n\tstruct mem_size_stats mss = \{\};\n)/$1\n#ifdef CONFIG_KSU_SUSFS_SUS_MAP\n\tif (vma->vm_file) {\n\t\tif (SUSFS_IS_INODE_SUS_MAP(file_inode(vma->vm_file)))\n\t\t\treturn 0;\n\t}\n#endif \/\/ #ifdef CONFIG_KSU_SUSFS_SUS_MAP\n/' fs/proc/task_mmu.c
-    if ! grep -qF 'SUSFS_IS_INODE_SUS_MAP' fs/proc/task_mmu.c; then
-      echo "::error::show_smap SUS_MAP 检查手工补丁失败，请人工核对 fs/proc/task_mmu.c"
-      exit 1
-    fi
+# 3) fs/proc/task_mmu.c：2026-03 起的 AOSP 6.12 把 show_smaps_rollup 改成了
+#    VMA_ITERATOR + do/for_each_vma 结构，v2.4.0 主补丁按旧结构写的两个 hunk
+#    （SUS_MAP 检查与 bypass_orig_flow 标签）必然失配；按 cctv18 oki 补丁对同一棵
+#    树的写法补齐，补完删掉 .rej。结构对不上时保留 .rej 交给后面的计数告警。
+task_mmu_sus_map_rollup_compat() {
+  [[ -f fs/proc/task_mmu.c && -f fs/proc/task_mmu.c.rej ]] || return 0
+  if perl -0777 -i -pe '
+    my $nl = /\r\n/ ? "\r\n" : "\n";
+    my $n1 = ($_ =~ s{
+      (\tvma_start\s*=\s*vma->vm_start;\r?\n\tdo\s*\{\r?\n)
+      (\t\tsmap_gather_stats\(vma,\s*&mss,\s*0\);\r?\n)
+    }{
+      $1
+      . "#ifdef CONFIG_KSU_SUSFS_SUS_MAP$nl\t\tif (vma->vm_file && SUSFS_IS_INODE_SUS_MAP(file_inode(vma->vm_file)))$nl\t\t\tgoto bypass_orig_flow;$nl#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MAP$nl"
+      . $2
+      . "#ifdef CONFIG_KSU_SUSFS_SUS_MAP$nl"
+      . "bypass_orig_flow:$nl"
+      . "#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MAP$nl"
+    }msex);
+    my $n2 = ($_ =~ s{
+      (\t\t\t\/\*[ ]Case[ ]4[ ]above[ ]\*\/\r?\n\t\t\tif[ ]\(vma->vm_end[ ]>[ ]last_vma_end\)[ ]\{\r?\n)
+      (\t\t\t\tsmap_gather_stats\(vma,\s*&mss,\s*last_vma_end\);\r?\n\t\t\t\tlast_vma_end\s*=\s*vma->vm_end;\r?\n)
+    }{
+      $1
+      . "#ifdef CONFIG_KSU_SUSFS_SUS_MAP$nl"
+      . "\t\t\t\tif (!vma->vm_file || !(SUSFS_IS_INODE_SUS_MAP(file_inode(vma->vm_file)))) {$nl"
+      . "\t\t\t\t\tsmap_gather_stats(vma, &mss, last_vma_end);$nl"
+      . "\t\t\t\t\tlast_vma_end = vma->vm_end;$nl"
+      . "\t\t\t\t}$nl"
+      . "#else$nl"
+      . $2
+      . "#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MAP$nl"
+    }msex);
+    die "task_mmu.c show_smaps_rollup 结构不匹配（n1=$n1 n2=$n2）\n" unless $n1 == 1 && $n2 == 1;
+  ' fs/proc/task_mmu.c 2>/dev/null; then
     rm -f fs/proc/task_mmu.c.rej
+    echo "SUSFS task_mmu.c 兼容：已按 VMA_ITERATOR 结构补齐 show_smaps_rollup 的 SUS_MAP 处理"
+  else
+    echo "::warning title=SUSFS 兼容::task_mmu.c 的 show_smaps_rollup 结构不匹配，保留 .rej"
   fi
-fi
+}
+task_mmu_sus_map_rollup_compat
 
 # 为尚未提供 SU 会话 FD 接口的 SukiSU/BakaSU 恢复旧版 exec hook 行为
 EXEC_HELPER=""
@@ -324,13 +372,6 @@ if [[ "$ANDROID_VERSION" == "android15" && "$KERNEL_VERSION" == "6.6" ]]; then
   fi
 fi
 
-if [[ "$ANDROID_VERSION" == "android16" && "$KERNEL_VERSION" == "6.12" ]]; then
-  if [[ "$CURRENT_SUB" -ge 58 ]] && ! grep -qF '#include <linux/dma-buf.h>' fs/exec.c; then
-    echo "还原 Android 16 6.12 exec.c 临时调整"
-    sed -i '0,/^#include /s//#include <linux\/dma-buf.h>\n&/' fs/exec.c
-  fi
-fi
-
 if [[ -n "$SUPER_FS_H_REMOVED" ]] \
   && ! grep -qF '#include <trace/hooks/fs.h>' fs/super.c; then
   echo "还原 super.c 临时调整"
@@ -393,16 +434,6 @@ if [[ "$ANDROID_VERSION" == "android15" && "$KERNEL_VERSION" == "6.6" ]]; then
   fi
 fi
 
-# Android 16 - 6.12 修复
-if [[ "$ANDROID_VERSION" == "android16" && "$KERNEL_VERSION" == "6.12" ]]; then
-  # 固定旧版 SukiSU 在 6.12 上会重复定义 setresuid hook
-  SETUID_HOOK="$KERNEL_ROOT/common/drivers/kernelsu/setuid_hook.c"
-  if [[ -n "$LEGACY_SUKISU_CONFIG" && -f "$SETUID_HOOK" ]] \
-    && grep -qF 'defined(CONFIG_KSU_MANUAL_HOOK))' "$SETUID_HOOK"; then
-    sed -i 's/defined(CONFIG_KSU_MANUAL_HOOK))/!defined(CONFIG_KSU_SUSFS) \&\& defined(CONFIG_KSU_MANUAL_HOOK))/' "$SETUID_HOOK"
-    echo "已修复 setuid_hook.c 重复定义问题"
-  fi
-fi
 ###############################################################################
 # SELinux hide 兼容
 #
@@ -971,3 +1002,105 @@ susfs_def_kstatfs_fwd_compat() {
   echo "SUSFS susfs_def.h 兼容：已补上"
 }
 susfs_def_kstatfs_fwd_compat
+
+# ---- priority uid filter 的两个 helper 只被该特性的守卫块使用（2026-11-01 重构）----
+# 2026-11-01 的 SUSFS 重构（268fba59e）把 priority uid filter 变成 config 门控特性：
+# 整块代码（含全部调用点）包进 `#ifdef CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER`，但
+#   static struct cred *susfs_switch_to_ksu_domain(void)    （约 183 行）
+#   static void susfs_restore_creds(struct cred *orig_cred) （约 217 行）
+# 两个 helper 的定义留在守卫外。该符号只声明在 SUSFS 自带的 KernelSU 侧补丁
+# （kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch，default y）里，而这里用的是
+# 各 KSU 变体自带的 Kconfig —— 未声明该符号时守卫恒假、特性块被编掉，两个 helper
+# 成为 unused static function，clang 以 -Werror,-Wunused-function 报错、fs/susfs.o 失败
+# （android15-6.6-118 + FinaSU，2026-11-02 实测 exit 2）。内核文件侧的调用点
+# （block/ioprio.c、kernel/sys.c）都在同一守卫内，包上即与上游不变量一致。
+# 判据只看产物本身：① susfs.c 里有该守卫块；② 树里的 KernelSU Kconfig 没有声明该
+# 符号；③ 两个 helper 在守卫块外没有任何其他引用 —— 三条同时成立才动手。没有守卫块、
+# 已声明符号、定义已在守卫内（幂等）都跳过；块外还有引用或布局不符则告警跳过、不改。
+susfs_priority_uid_guard_state() {
+  # 守卫块结构判定（只看代码本身，注释不参与），退出码即结论：
+  #   0 需要包裹 / 10 布局不符 / 11 定义已在守卫块内 / 12 守卫块外仍有引用
+  perl -0777 -ne '
+    my @L = split /\n/;
+    my ($s, $e, $d) = (-1, -1, 0);
+    for my $i (0 .. $#L) {
+      (my $l = $L[$i]) =~ s/\r$//;
+      if ($s < 0) {
+        if ($l =~ /^#\s*ifdef\s+CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER\b/) { $s = $i; $d = 1 }
+        next;
+      }
+      if ($l =~ /^#\s*if/)    { $d++; next }
+      if ($l =~ /^#\s*endif/) { $d--; if (!$d) { $e = $i; last } }
+    }
+    exit 10 if $s < 0 || $e < 0;
+    my $t = $_;
+    $t =~ s{/\*.*?\*/}{ my $c = $&; $c =~ s/[^\n]//g; $c }ges;  # 块注释只留换行
+    $t =~ s{//[^\n]*}{}g;                                        # 行注释整段去掉
+    my @C = split /\n/, $t;
+    my (@def, @outside);
+    for my $j (0 .. $#C) {
+      next unless $C[$j] =~ /susfs_switch_to_ksu_domain|susfs_restore_creds/;
+      if ($L[$j] =~ /^static\s+struct\s+cred\s*\*\s*susfs_switch_to_ksu_domain\s*\(/) { push @def, $j; next }
+      if ($L[$j] =~ /^static\s+void\s+susfs_restore_creds\s*\(/) { push @def, $j; next }
+      push @outside, $j if $j < $s || $j > $e;
+    }
+    exit 10 unless @def == 2;
+    exit 11 if grep { $_ > $s && $_ < $e } @def;
+    exit 12 if @outside;
+    exit 0;
+  ' "$1"
+}
+susfs_priority_uid_filter_guard_compat() {
+  local f="$KERNEL_ROOT/common/fs/susfs.c"
+  if [ ! -f "$f" ]; then
+    echo "SUSFS priority uid filter 守卫步骤：未找到 fs/susfs.c，跳过"
+    return 0
+  fi
+  if ! grep -q '^#ifdef CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER' "$f"; then
+    echo "SUSFS priority uid filter 守卫步骤：无该守卫块（重构前版本），跳过"
+    return 0
+  fi
+  local kconf found=""
+  for kconf in "$KERNEL_ROOT/KernelSU/kernel/Kconfig" \
+              "$KERNEL_ROOT/common/drivers/kernelsu/Kconfig"; do
+    if [ -f "$kconf" ] \
+      && grep -qE '^[[:space:]]*config[[:space:]]+KSU_SUSFS_PRIORITY_UID_FILTER([[:space:]]|$)' "$kconf"; then
+      found="$kconf"
+      break
+    fi
+  done
+  if [ -n "$found" ]; then
+    echo "SUSFS priority uid filter 守卫步骤：Kconfig 已声明该符号，跳过"
+    return 0
+  fi
+  local st=0
+  susfs_priority_uid_guard_state "$f" || st=$?
+  case "$st" in
+    11) echo "SUSFS priority uid filter 守卫步骤：helper 定义已在守卫块内，跳过"; return 0 ;;
+    12) echo "::warning title=priority uid filter 守卫::守卫块外仍有 helper 引用，跳过不改（需人工确认）"; return 0 ;;
+    10) echo "::warning title=priority uid filter 守卫::susfs.c 里没找到预期的两个 helper 定义，跳过不改"; return 0 ;;
+    0)  : ;;
+    *)  echo "::warning title=priority uid filter 守卫::结构判定失败（rc=$st），跳过不改"; return 0 ;;
+  esac
+  local before_if after_if
+  before_if=$(grep -cE '^#ifdef CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER\r?$' "$f" || true)
+  echo "SUSFS priority uid filter 守卫步骤：把两个 helper 定义包进同一守卫"
+  perl -0777 -i -pe '
+    my $nl = /\r\n/ ? "\r\n" : "\n";
+    my $n = ($_ =~ s{^(static\s+struct\s+cred\s*\*\s*susfs_switch_to_ksu_domain\s*\(\s*void\s*\)\s*\{.*?^static\s+void\s+susfs_restore_creds\s*\(.*?\n\})}{#ifdef CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER$nl$1$nl#endif // #ifdef CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER}ms);
+    die "priority uid filter helper 段落匹配失败（n=$n）\n" unless $n == 1;
+  ' "$f" || { echo "::error::包裹 priority uid filter helper 失败" >&2; exit 1; }
+  after_if=$(grep -cE '^#ifdef CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER\r?$' "$f" || true)
+  if [ "$after_if" -ne $((before_if + 1)) ]; then
+    echo "::error::priority uid filter 守卫计数不符（$before_if → $after_if）" >&2
+    exit 1
+  fi
+  st=0
+  susfs_priority_uid_guard_state "$f" || st=$?
+  if [ "$st" -ne 11 ]; then
+    echo "::error::包裹后结构复判未通过（rc=$st）" >&2
+    exit 1
+  fi
+  echo "SUSFS priority uid filter 守卫步骤：已包裹"
+}
+susfs_priority_uid_filter_guard_compat

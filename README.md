@@ -21,6 +21,7 @@
 Built upon [AnyKernel3](https://github.com/osm0sis/AnyKernel3), this repository uses GitHub Actions to automatically compile Android GKI kernels. It integrates multiple KernelSU variants and SUSFS kernel-level spoofing solutions Add practical patches such as ZRAM and BBG.
 
 - The build workflows are adapted from [zzh20188/GKI_KernelSU_SUSFS](https://github.com/zzh20188/GKI_KernelSU_SUSFS) and [Wild Kernels](https://github.com/WildKernels/GKI_KernelSU_SUSFS)
+- 6.12.69 GKI 工作流（[`fastbuild_6.12.69_gki.yml`](.github/workflows/fastbuild_6.12.69_gki.yml)）：拉取上游 https://github.com/cctv18/oppo_oplus_realme_sm8850 的源码（GKI 内核源码、LLVM/Clang 19 + Rust 工具链及附属补丁）后构建
 - Flashing rule: ***It can be flashed as long as the kernel version matches.***
 
 ## Supported Kernel Versions
@@ -31,7 +32,6 @@ Built upon [AnyKernel3](https://github.com/osm0sis/AnyKernel3), this repository 
 | 13 | 5.15 | `kernel-a13-5-15.yml` |
 | 14 | 6.1 | `kernel-a14-6-1.yml` |
 | 15 | 6.6 | `kernel-a15-6-6.yml` |
-| 16 | 6.12 | `kernel-a16-6-12.yml` |
 | Custom | Any | `kernel-custom.yml` |
 
 ## Features
@@ -43,7 +43,7 @@ Built upon [AnyKernel3](https://github.com/osm0sis/AnyKernel3), this repository 
 |  SUSFS | Kernel-level hiding working with KSU to complete environment spoofing |
 |  ZRAM LZ4 | ZRAM Compression Algorithm Patch |
 |  BBG (Baseband Guard) | BBG patch to protect the baseband partitions from accidental wipe |
-|  Network enhancement | Optional IPSet + BBR kernel config (BBR default congestion control, fq/fq_codel qdisc, full IPSet types up to 65534 sets, IPv6 NAT/masquerade, extra congestion algorithms) |
+|  Network enhancement | Optional network stack upgrade: BBRv3 backport where available (defaults to BBR v1 otherwise), full IPSet types up to 65534 sets, fq/fq_codel/cake qdisc, connmark, IPv6 NAT/masquerade, TTL/HopLimit match, WireGuard, CIFS |
 |  KPM | Optional KPM feature / build-time patching |
 |  Re-Kernel | Optional Re-Kernel driver integration |
 |  CVE-2026-43499 | Optional automatic application of the rtmutex fix |
@@ -98,6 +98,7 @@ A commit is a hash string representing the state of a repository at a certain po
 - [zzh20188/GKI_KernelSU_SUSFS](https://github.com/zzh20188/GKI_KernelSU_SUSFS) / [WildKernels/GKI_KernelSU_SUSFS](https://github.com/WildKernels/GKI_KernelSU_SUSFS) / [LingLuo17/Anykernel3](https://github.com/LingLuo17/Anykernel3)
 - [SukiSU](https://sukisu.org/) / [BakaSU](https://bakasu.org/) / [FinaSU](https://github.com/LyraVoid/FinaSU)
 - [SUSFS](https://gitlab.com/simonpunk/susfs4ksu)
+- [cctv18/oppo_oplus_realme_sm8850](https://github.com/cctv18/oppo_oplus_realme_sm8850)
 
 <div align="center">
 

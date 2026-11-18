@@ -38,7 +38,6 @@ VERSIONS = {
     "5_15": "android13/5.15",
     "6_1": "android14/6.1",
     "6_6": "android15/6.6",
-    "6_12": "android16/6.12",
 }
 
 # data file (relative to repo root) -> matrix workflow file
@@ -47,7 +46,6 @@ MATRIX_FILES = {
     "android13/5.15": "kernel-a13-5-15.yml",
     "android14/6.1": "kernel-a14-6-1.yml",
     "android15/6.6": "kernel-a15-6-6.yml",
-    "android16/6.12": "kernel-a16-6-12.yml",
 }
 
 ITEM_INDENT = "          - "

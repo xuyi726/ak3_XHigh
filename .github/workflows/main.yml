@@ -71,7 +71,7 @@ on:
           - "enabled (开启)"
           - "patched (开启并修补)"
       droidspaces:
-        description: "Droidspaces 容器支持 (5.10~6.6: 槽位补丁, 6.12: 开/关)"
+        description: "Droidspaces 容器支持 (5.10~6.6: 槽位补丁)"
         type: choice
         options:
           - "off"
@@ -102,7 +102,7 @@ on:
         type: boolean
         default: false
       use_net_enhance:
-        description: "启用 网络增强 (IPSet + BBR)"
+        description: "启用 网络增强 (BBRv3 + IPSet + Qdisc + CIFS)"
         type: boolean
         default: false
       use_rekernel:
@@ -141,10 +141,6 @@ on:
         description: "Android 15 - 6.6"
         type: boolean
         default: false
-      build_a16_6_12:
-        description: "Android 16 - 6.12"
-        type: boolean
-        default: false
       build_all:
         description: "构建全部版本"
         type: boolean
@@ -164,6 +160,19 @@ jobs:
     with:
       kernelsu_variant: ${{ inputs.kernelsu_variant }}
       build_channel: ${{ inputs.build_channel }}
+      cancel_susfs: ${{ inputs.cancel_susfs }}
+      use_zram: ${{ inputs.use_zram }}
+      use_bbg: ${{ inputs.use_bbg }}
+      use_net_enhance: ${{ inputs.use_net_enhance }}
+      use_rekernel: ${{ inputs.use_rekernel }}
+      use_kpm: ${{ inputs.use_kpm }}
+      cve_2026_43499_patch: ${{ inputs.cve_2026_43499_patch }}
+      skip_incompatible: ${{ inputs.skip_incompatible || false }}
+      droidspaces: ${{ inputs.droidspaces || 'off' }}
+      droidspaces_ntsync: ${{ inputs.droidspaces_ntsync || false }}
+      artifact_upload_mode: ${{ inputs.artifact_upload_mode }}
+      version: ${{ inputs.version || '' }}
+      build_time: ${{ inputs.build_time || '' }}
 
   # ==================== Android 12 - 5.10 构建 ====================
   build-a12-5-10:
@@ -289,37 +298,6 @@ jobs:
       skip_incompatible: ${{ inputs.skip_incompatible || false }}
       called_from_main: true
 
-  # ==================== Android 16 - 6.12 构建 ====================
-  build-a16-6-12:
-    needs: [get-manager]
-    # 管理器拉取失败不阻塞构建（ksuCommit 为空则内核跟随 main HEAD）
-    if: ${{ !cancelled() && (inputs.build_a16_6_12 || inputs.build_all) }}
-    uses: ./.github/workflows/kernel-a16-6-12.yml
-    secrets: inherit
-    with:
-      kernelsu_variant: ${{ inputs.kernelsu_variant }}
-      build_channel: ${{ inputs.build_channel }}
-      ksu_commit: ${{ needs.get-manager.outputs.ksuCommit }}
-      ksu_cert_size: ${{ needs.get-manager.outputs.managerCertSize }}
-      ksu_cert_hash: ${{ needs.get-manager.outputs.managerCertHash }}
-      version: ${{ inputs.version }}
-      build_time: ${{ inputs.build_time || '' }}
-      use_zram: ${{ inputs.use_zram }}
-
-      a17_compat: ${{ inputs.a17_compat }}
-
-      use_bbg: ${{ inputs.use_bbg }}
-      use_net_enhance: ${{ inputs.use_net_enhance }}
-      use_kpm: ${{ inputs.use_kpm }}
-      use_rekernel: ${{ inputs.use_rekernel }}
-      cve_2026_43499_patch: ${{ inputs.cve_2026_43499_patch }}
-      cancel_susfs: ${{ inputs.cancel_susfs }}
-      droidspaces: ${{ inputs.droidspaces }}
-      artifact_upload_mode: ${{ inputs.artifact_upload_mode }}
-      droidspaces_ntsync: ${{ inputs.droidspaces_ntsync }}
-      skip_incompatible: ${{ inputs.skip_incompatible || false }}
-      called_from_main: true
-
   # ==================== 收集补丁冲突文件 ====================
   # 汇总所有构建任务中的 .rej 文件，方便调试补丁问题
   collect-rejects:
@@ -330,7 +308,6 @@ jobs:
       - build-a13-5-15
       - build-a14-6-1
       - build-a15-6-6
-      - build-a16-6-12
     steps:
       - name: 下载冲突文件
         uses: actions/download-artifact@v8
@@ -369,7 +346,6 @@ jobs:
       - build-a13-5-15
       - build-a14-6-1
       - build-a15-6-6
-      - build-a16-6-12
     steps:
       - name: 下载编译失败日志
         uses: actions/download-artifact@v8
@@ -453,7 +429,6 @@ jobs:
       - build-a13-5-15
       - build-a14-6-1
       - build-a15-6-6
-      - build-a16-6-12
 
     # ==================== 环境变量 ====================
     env:
@@ -487,7 +462,6 @@ jobs:
           # 功能开关显示
           echo "LZ4_STATUS=${{ inputs.use_zram && '开启' || '未开启' }}" >> $GITHUB_ENV
           echo "BBG_STATUS=${{ inputs.use_bbg && '开启' || '未开启' }}" >> $GITHUB_ENV
-          echo "NET_ENHANCE_STATUS=${{ inputs.use_net_enhance && '开启' || '未开启' }}" >> $GITHUB_ENV
           echo "REKERNEL_STATUS=${{ inputs.use_rekernel && '开启' || '未开启' }}" >> $GITHUB_ENV
           if [[ "${{ inputs.use_kpm }}" == enabled* ]]; then
             echo "KPM_STATUS=开启（未修补）" >> $GITHUB_ENV
@@ -497,7 +471,19 @@ jobs:
             echo "KPM_STATUS=未开启" >> $GITHUB_ENV
           fi
 
-          # Hook 类型（SukiSU / BakaSU / FinaSU 的 SUSFS 集成均为 fs 内联钩子）
+          # Droidspaces 容器支持（含 NTSync）
+          if [ "${{ inputs.droidspaces }}" = "off" ]; then
+            echo "DROIDSPACES_STATUS=未开启" >> $GITHUB_ENV
+          elif [ "${{ inputs.droidspaces_ntsync }}" = "true" ]; then
+            echo "DROIDSPACES_STATUS=开启（NTSync）" >> $GITHUB_ENV
+          else
+            echo "DROIDSPACES_STATUS=开启" >> $GITHUB_ENV
+          fi
+
+          # 网络增强 (BBRv3 / IPSet / Qdisc / CIFS)
+          echo "NET_ENHANCE_STATUS=${{ inputs.use_net_enhance && '开启' || '未开启' }}" >> $GITHUB_ENV
+
+          # Hook 类型
           echo "HOOK_TYPE=SUSFS Inline Hooks" >> $GITHUB_ENV
 
           # Mount 类型（FinaSU 使用 metamodule 模块架构）
@@ -507,8 +493,9 @@ jobs:
             echo "MOUNT_TYPE=Magic Mount" >> $GITHUB_ENV
           fi
 
-          # 发布标题
+          # 发布标题与正文标题
           echo "RELEASE_NAME=GKI Kernel: ${KSU_NAME} ${KSU_VER} + SUSFS ${SUS_VER}" >> $GITHUB_ENV
+          echo "RELEASE_HEADER=**${KSU_NAME} ${KSU_VER}** + **SUSFS ${SUS_VER}**" >> $GITHUB_ENV
 
       # ==================== 验证构建状态 ====================
       # 确保所有选中的构建任务都成功完成
@@ -526,7 +513,6 @@ jobs:
           check_build "${{ inputs.build_a13_5_15 || inputs.build_all }}" "build-a13-5-15" "${{ needs.build-a13-5-15.result }}"
           check_build "${{ inputs.build_a14_6_1 || inputs.build_all }}" "build-a14-6-1" "${{ needs.build-a14-6-1.result }}"
           check_build "${{ inputs.build_a15_6_6 || inputs.build_all }}" "build-a15-6-6" "${{ needs.build-a15-6-6.result }}"
-          check_build "${{ inputs.build_a16_6_12 || inputs.build_all }}" "build-a16-6-12" "${{ needs.build-a16-6-12.result }}"
           [[ "$failed" -ne 0 ]] && exit 1 || true
 
       # ==================== 检出代码 ====================
@@ -610,7 +596,6 @@ jobs:
             ["gki_android13_5_15"]="gki-android13-5.15"
             ["gki_android14_6_1"]="gki-android14-6.1"
             ["gki_android15_6_6"]="gki-android15-6.6"
-            ["gki_android16_6_12"]="gki-android16-6.12"
           )
           for var_name in "${!BRANCH_MAP[@]}"; do
             branch_name="${BRANCH_MAP[$var_name]}"
@@ -653,7 +638,6 @@ jobs:
           append_target "${{ inputs.build_a13_5_15 || inputs.build_all }}" "Android 13 / 5.15"
           append_target "${{ inputs.build_a14_6_1 || inputs.build_all }}" "Android 14 / 6.1"
           append_target "${{ inputs.build_a15_6_6 || inputs.build_all }}" "Android 15 / 6.6"
-          append_target "${{ inputs.build_a16_6_12 || inputs.build_all }}" "Android 16 / 6.12"
           if [[ -z "$build_targets" ]]; then
             build_targets="未选择"
           fi
@@ -669,7 +653,6 @@ jobs:
           append_susfs_commit "${{ inputs.build_a13_5_15 || inputs.build_all }}" "Android 13 / 5.15" "${COMMIT_HASH_gki_android13_5_15}" "${COMMIT_URL_gki_android13_5_15}"
           append_susfs_commit "${{ inputs.build_a14_6_1 || inputs.build_all }}" "Android 14 / 6.1" "${COMMIT_HASH_gki_android14_6_1}" "${COMMIT_URL_gki_android14_6_1}"
           append_susfs_commit "${{ inputs.build_a15_6_6 || inputs.build_all }}" "Android 15 / 6.6" "${COMMIT_HASH_gki_android15_6_6}" "${COMMIT_URL_gki_android15_6_6}"
-          append_susfs_commit "${{ inputs.build_a16_6_12 || inputs.build_all }}" "Android 16 / 6.12" "${COMMIT_HASH_gki_android16_6_12}" "${COMMIT_URL_gki_android16_6_12}"
           if [[ ! -s susfs_commits.md ]]; then
             echo "- 未获取到本次构建对应的 SUSFS 提交信息" > susfs_commits.md
           fi
@@ -677,7 +660,7 @@ jobs:
           cat > release_body.md << EOF
           ## GKI Kernel Release
 
-          **$KSU_NAME $KSU_VER** + **SUSFS $SUS_VER**
+          $RELEASE_HEADER
 
           | 项目 | 内容 |
           |:---|:---|
@@ -691,16 +674,18 @@ jobs:
           | 项目 | 内容 |
           |:---|:---|
           | KernelSU 变体 | $KSU_NAME |
+          | KernelSU 版本 | $KSU_VER |
           | KernelSU 分支 | $BRANCH_INFO |
           | SUSFS | $SUS_VER |
           | Hook 类型 | $HOOK_TYPE |
           | 挂载方式 | $MOUNT_TYPE |
           | LTO | thin |
-          | BBG 基带保护 | $BBG_STATUS |
-          | 网络增强 (IPSet + BBR) | $NET_ENHANCE_STATUS |
           | ZRAM / LZ4KD | $LZ4_STATUS |
+          | BBG 基带保护 | $BBG_STATUS |
+          | 网络增强 (BBRv3 / IPSet / Qdisc / CIFS) | $NET_ENHANCE_STATUS |
           | Re-Kernel 驱动 | $REKERNEL_STATUS |
           | KPM | $KPM_STATUS |
+          | Droidspaces 容器支持 | $DROIDSPACES_STATUS |
 
           ### 下载说明
 

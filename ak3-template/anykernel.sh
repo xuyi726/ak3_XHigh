@@ -71,12 +71,12 @@ ui_print " " "  -> System check passed: ${sys_ver:-unknown} (target $range_text)
 
 # Environment hint only - never fatal: in a recovery/installer the kernel that runs
 # here is the installer kernel, not necessarily the ROM's kernel. The list covers
-# every GKI line this repo builds (5.10/5.15/6.1/6.6/6.12) plus the Android 17 GKI
+# every GKI line this repo builds (5.10/5.15/6.1/6.6) plus the Android 17 GKI
 # kernel (6.18, refs/heads/android17-6.18 on AOSP) and interim mainline-based
 # kernels (6.16/6.17) so newer installer environments don't block.
 kernel_version=$(cat /proc/version | awk -F '-' '{print $1}' | awk '{print $3}')
 case $kernel_version in
-    5.10*|5.15*|6.1*|6.6*|6.12*|6.16*|6.17*|6.18*) ksu_supported=true ;;
+    5.10*|5.15*|6.1*|6.6*|6.16*|6.17*|6.18*) ksu_supported=true ;;
     *) ksu_supported=false ;;
 esac
 
