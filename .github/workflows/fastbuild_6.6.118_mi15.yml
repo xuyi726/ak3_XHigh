@@ -388,13 +388,25 @@ jobs:
               sed -i -E "s|^(REPO_BRANCH[[:space:]]*[:?+]?=)[[:space:]]*main[[:space:]]*\$|\1 $KSU_PIN|" "$KSU_VERSION_SOURCE"
               grep -qE "^REPO_BRANCH[[:space:]]*[:?+]?=[[:space:]]*$KSU_PIN[[:space:]]*\$" "$KSU_VERSION_SOURCE" \
                 || { echo "::error::未能在 $KSU_VERSION_SOURCE 中对齐 REPO_BRANCH（上游结构可能已变化），无法对齐管理器版本"; exit 1; }
-              echo "SukiSU-Nova 内核侧版本来源已对齐管理器构建提交 $KSU_PIN (KSU 版本 $((40000 + $(git rev-list --count "$KSU_PIN") - 2815)))"
+              # 与内核侧算法一致（改名后 VERSION_BASE=30000）：main 为加 996，builtin 为减 4001
+              if [ "$SUKISU_NOVA_BRANCH" = "builtin" ]; then
+                KSU_PIN_VERSION=$((30000 + $(git rev-list --count "$KSU_PIN") - 4001))
+              else
+                KSU_PIN_VERSION=$((30000 + $(git rev-list --count "$KSU_PIN") + 996))
+              fi
+              echo "SukiSU-Nova 内核侧版本来源已对齐管理器构建提交 $KSU_PIN (KSU 版本 $KSU_PIN_VERSION)"
             fi
-            # 与 SukiSU-Nova 内核侧算法一致：40000 + 提交数 - 2815（官方管理器 versionCode 同源）
+            # 与 SukiSU-Nova 内核侧算法一致（改名后 VERSION_BASE=30000）：
+            # main 分支 kernel/Kbuild 为 30000 + 提交数 + 996；builtin 分支 kernel/Makefile 为 30000 + 提交数 - 4001
             if [ -n "$KSU_PIN" ]; then
-              KSU_VERSION=$(expr $(git rev-list --count "$KSU_PIN") + 40000 - 2815)
+              KSU_PIN_COUNT=$(git rev-list --count "$KSU_PIN")
             else
-              KSU_VERSION=$(expr $(git rev-list --count main) + 40000 - 2815)
+              KSU_PIN_COUNT=$(git rev-list --count main)
+            fi
+            if [ "$SUKISU_NOVA_BRANCH" = "builtin" ]; then
+              KSU_VERSION=$(expr "$KSU_PIN_COUNT" + 30000 - 4001)
+            else
+              KSU_VERSION=$(expr "$KSU_PIN_COUNT" + 30000 + 996)
             fi
             echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
             cd ..
