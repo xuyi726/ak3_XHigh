@@ -3,7 +3,7 @@
 #
 # 依赖环境变量：
 #   ANDROID_VERSION KERNEL_VERSION KSU_VARIANT OS_PATCH_LEVEL SUB_LEVEL
-#   KERNEL_ROOT SUSFS4KSU KERNEL_PATCHES LEGACY_SUKISU_CONFIG
+#   KERNEL_ROOT SUSFS4KSU KERNEL_PATCHES LEGACY_SUKISU_NOVA_CONFIG
 # 调用前必须将工作目录设为 $KERNEL_ROOT
 set -eo pipefail
 
@@ -15,8 +15,8 @@ cp "$SUSFS4KSU"/kernel_patches/fs/* ./common/fs/
 cp "$SUSFS4KSU"/kernel_patches/include/linux/* ./common/include/linux/
 
 case "$KSU_VARIANT" in
-  "SukiSU"|"BakaSU"|"ReSukiSU")
-    echo "SukiSU/BakaSU 使用内置 SUSFS 支持"
+  "SukiSU-Nova"|"BakaSU"|"ReSukiSU")
+    echo "SukiSU-Nova/BakaSU 使用内置 SUSFS 支持"
     ;;
 esac
 
@@ -28,13 +28,13 @@ fi
 
 # ---- susfs4ksu R28 getpriority/priority uid filter 开关归一化 ----
 # 该特性整套代码（含 susfs_switch_to_ksu_domain / susfs_restore_creds 两个辅助
-# 函数）以 CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER 为开关，但 SukiSU(builtin)、
-# BakaSU、FinaSU 的原生驱动 Kconfig 均未定义该选项，同时 SukiSU 驱动的
+# 函数）以 CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER 为开关，但 SukiSU-Nova(builtin)、
+# BakaSU、FinaSU 的原生驱动 Kconfig 均未定义该选项，同时 SukiSU-Nova 驱动的
 # supercall 分发（CMD_SUSFS_SET_PRIORITY_UID_FILTER）与 pkg_observer 无条件调用
 # susfs_set_priority_uid_filter / susfs_parse_priority_app_strings，于是：
 #   - susfs.c 的两个辅助函数失去唯一调用方，clang -Werror,-Wunused-function
-#     直接中断编译（FinaSU/BakaSU/SukiSU 三个变体均复现）；
-#   - susfs.h 中的声明被裁掉，SukiSU 驱动侧报 -Wimplicit-function-declaration。
+#     直接中断编译（FinaSU/BakaSU/SukiSU-Nova 三个变体均复现）；
+#   - susfs.h 中的声明被裁掉，SukiSU-Nova 驱动侧报 -Wimplicit-function-declaration。
 # 把开关上提到 CONFIG_KSU_SUSFS（启用 SUSFS 时恒为 y）使特性完整可用。
 # 仅改写预处理指令行：susfs.c 里 copy_config_to_buf() 的
 # "CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER\n" 字符串字面量保持原样，管理器
@@ -123,7 +123,7 @@ restore_legacy_fdinfo_context() {
 
 # 临时调整旧内核源码上下文，使 SUSFS 主补丁可以匹配
 if [[ "$ANDROID_VERSION" == "android12" && "$KERNEL_VERSION" == "5.10" ]]; then
-  if [[ -n "$LEGACY_SUKISU_CONFIG" && "$CURRENT_SUB" -le 43 ]]; then
+  if [[ -n "$LEGACY_SUKISU_NOVA_CONFIG" && "$CURRENT_SUB" -le 43 ]]; then
     echo "临时调整 Android 12 5.10 base.c 上下文"
     perl -i -pe 's/(int|size_t)\s+this_len\s*=\s*min_t\s*\(\s*\1\s*,/size_t this_len = min_t(size_t,/;' fs/proc/base.c
   fi
@@ -263,9 +263,9 @@ task_mmu_sus_map_rollup_compat() {
 }
 task_mmu_sus_map_rollup_compat
 
-# 为尚未提供 SU 会话 FD 接口的 SukiSU/BakaSU 恢复旧版 exec hook 行为
+# 为尚未提供 SU 会话 FD 接口的 SukiSU-Nova/BakaSU 恢复旧版 exec hook 行为
 EXEC_HELPER=""
-if [[ "$KSU_VARIANT" == SukiSU* || "$KSU_VARIANT" == "BakaSU" || "$KSU_VARIANT" == "ReSukiSU" ]]; then
+if [[ "$KSU_VARIANT" == SukiSU-Nova* || "$KSU_VARIANT" == "BakaSU" || "$KSU_VARIANT" == "ReSukiSU" ]]; then
   if grep -qF 'ksu_install_su_fd();' fs/exec.c; then
     EXEC_HELPER="ksu_install_su_fd"
   elif grep -qF 'ksu_handle_post_execveat_sucompat(' fs/exec.c; then
@@ -317,7 +317,7 @@ fi
 
 # 还原仅用于补丁匹配的临时源码调整
 if [[ "$ANDROID_VERSION" == "android12" && "$KERNEL_VERSION" == "5.10" ]]; then
-  if [[ -n "$LEGACY_SUKISU_CONFIG" && "$CURRENT_SUB" -le 43 ]]; then
+  if [[ -n "$LEGACY_SUKISU_NOVA_CONFIG" && "$CURRENT_SUB" -le 43 ]]; then
     echo "还原 Android 12 5.10 base.c 临时调整"
     sed -i 's/^size_t this_len = min_t(size_t, count, PAGE_SIZE);$/int this_len = min_t(int, count, PAGE_SIZE);/' fs/proc/base.c
   fi
@@ -389,7 +389,7 @@ fix_task_mmu_show_pad() {
   local excluded_patch_level="${2:-}"
 
   # 仅固定旧版 SUSFS 补丁会引入 goto show_pad，最新版已不再包含该代码
-  if [[ -n "$LEGACY_SUKISU_CONFIG" && "$CURRENT_SUB" -le "$max_sub" ]] \
+  if [[ -n "$LEGACY_SUKISU_NOVA_CONFIG" && "$CURRENT_SUB" -le "$max_sub" ]] \
     && { [[ -z "$excluded_patch_level" ]] || [[ "$OS_PATCH_LEVEL" != "$excluded_patch_level" ]]; }; then
     sed -i -e 's/goto show_pad;/return 0;/' ./fs/proc/task_mmu.c
   fi
@@ -416,8 +416,8 @@ fi
 
 # Android 15 - 6.6 修复
 if [[ "$ANDROID_VERSION" == "android15" && "$KERNEL_VERSION" == "6.6" ]]; then
-  # 修复老版 SukiSU 6.6.50~6.6.58: task_mmu.c 打入 SUSFS 后使用 vma，但旧源码没有对应声明
-  if [[ -n "$LEGACY_SUKISU_CONFIG" && "$CURRENT_SUB" -ge 50 && "$CURRENT_SUB" -le 58 ]] \
+  # 修复老版 SukiSU-Nova 6.6.50~6.6.58: task_mmu.c 打入 SUSFS 后使用 vma，但旧源码没有对应声明
+  if [[ -n "$LEGACY_SUKISU_NOVA_CONFIG" && "$CURRENT_SUB" -ge 50 && "$CURRENT_SUB" -le 58 ]] \
     && grep -qF 'vma = find_vma(mm, start_vaddr);' ./fs/proc/task_mmu.c; then
     TASK_MMU_PATCH="$KERNEL_PATCHES/wild/archived/susfs_fix_patches/v2.1.0/a15-6.6/task_mmu.c.patch"
     if [ ! -f "$TASK_MMU_PATCH" ]; then
@@ -570,7 +570,7 @@ ksu_track_throne_compat() {
 }
 ksu_track_throne_compat
 
-# ---- SukiSU builtin 的 dynamic manager ioctl 标识符合并残留 ----
+# ---- SukiSU-Nova builtin 的 dynamic manager ioctl 标识符合并残留 ----
 # 上游 builtin 把 main 的 dynamic manager 移植过来时，uapi/supercall.h 里 106 号
 # ioctl 那一行漏改（main 用的是 KSU_IOCTL_MANAGER）：
 #   DECLARE(__u32, KSU_IOCTL_KPM, _IOWR('K', 106, ksu_manager_cmd));
@@ -659,7 +659,7 @@ ksu_manager_ioctl_compat() {
 }
 ksu_manager_ioctl_compat
 
-# ---- SukiSU builtin 的 throne_tracker 合并残留（与上一处同一批移植）----
+# ---- SukiSU-Nova builtin 的 throne_tracker 合并残留（与上一处同一批移植）----
 # 上游 builtin 移植 dynamic multi-manager（a233901 / PR #987）时还漏改了一处：
 # crown_manager() 里 pkg 是 if (sig_fallback) 块内的局部变量，函数末尾那个
 # 「跳过内置管理器、只给动态管理器加冕」的循环却在块外引用它：

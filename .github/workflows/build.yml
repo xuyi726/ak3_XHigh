@@ -185,7 +185,7 @@ jobs:
           DEFCONFIG=$KERNEL_ROOT/common/arch/arm64/configs/gki_defconfig
           SUSFS4KSU=$GITHUB_WORKSPACE/susfs4ksu
           KERNEL_PATCHES=$GITHUB_WORKSPACE/kernel_patches
-          SUKISU_PATCHES=$GITHUB_WORKSPACE/SukiSU_patch
+          SUKISU_NOVA_PATCHES=$GITHUB_WORKSPACE/SukiSU_patch
           ZZH_PATCHES=$GITHUB_WORKSPACE
           ANYKERNEL3=$GITHUB_WORKSPACE/AnyKernel3
           ACTION_BUILD=$GITHUB_WORKSPACE/Action-Build
@@ -281,7 +281,7 @@ jobs:
           rm -rf AnyKernel3/.git
 
           echo "克隆 SUSFS (分支: $SUSFS_BRANCH)..."
-          if [ "${{ inputs.ksu_variant }}" == "SukiSU" ]; then
+          if [ "${{ inputs.ksu_variant }}" == "SukiSU-Nova" ]; then
             if ! git clone https://github.com/ShirkNeko/susfs4ksu.git -b "$SUSFS_BRANCH" 2>/dev/null; then
               echo "ShirkNeko 仓库未找到分支 $SUSFS_BRANCH，回退到 simonpunk 原版..."
               git clone https://gitlab.com/simonpunk/susfs4ksu.git -b "$SUSFS_BRANCH"
@@ -310,7 +310,7 @@ jobs:
 
           echo "准备补丁资源..."
           git clone https://github.com/WildKernels/kernel_patches.git
-          git clone https://github.com/ShirkNeko/SukiSU_patch.git
+          git clone https://github.com/SukiSU-Nova/SukiSU_patch.git
           echo "使用当前仓库补丁目录: $ZZH_PATCHES"
           git clone https://github.com/Numbersf/Action-Build.git --depth=1
 
@@ -459,7 +459,7 @@ jobs:
             "FinaSU")
               BRANCH="-s master"
               ;;
-            "SukiSU")
+            "SukiSU-Nova")
               if [ "${{ inputs.enable_susfs }}" = "false" ]; then
                 BRANCH="-s main"
               else
@@ -472,15 +472,15 @@ jobs:
               ;;
           esac
 
-          # 检查自定义提交 (仅对 SukiSU 生效)
+          # 检查自定义提交 (仅对 SukiSU-Nova 生效)
           CONFIG_FILE="config/config"
           if [ -f "$CONFIG_FILE" ]; then
             CUSTOM_ENABLED=$(grep "^custom=" "$CONFIG_FILE" | cut -d'=' -f2)
-            if [ "$CUSTOM_ENABLED" == "true" ] && [ "$variant_input" == "SukiSU" ]; then
-              SUKISU_COMMIT=$(grep "^sukisu=" "$CONFIG_FILE" | cut -d'=' -f2)
-              if [ -n "$SUKISU_COMMIT" ]; then
-                BRANCH="-s $SUKISU_COMMIT"
-                echo "SukiSU 使用自定义提交: $SUKISU_COMMIT"
+            if [ "$CUSTOM_ENABLED" == "true" ] && [ "$variant_input" == "SukiSU-Nova" ]; then
+              SUKISU_NOVA_COMMIT=$(grep "^sukisu-nova=" "$CONFIG_FILE" | cut -d'=' -f2)
+              if [ -n "$SUKISU_NOVA_COMMIT" ]; then
+                BRANCH="-s $SUKISU_NOVA_COMMIT"
+                echo "SukiSU-Nova 使用自定义提交: $SUKISU_NOVA_COMMIT"
               fi
             fi
           fi
@@ -496,16 +496,16 @@ jobs:
           KSU_CERT_HASH: ${{ inputs.ksu_cert_hash }}
         run: |
           case "${{ inputs.ksu_variant }}" in
-            "SukiSU")
+            "SukiSU-Nova")
               echo "添加 ${{ inputs.ksu_variant }}..."
-              curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash $BRANCH
+              curl -LSs "https://raw.githubusercontent.com/SukiSU-Nova/SukiSU-Nova/main/kernel/setup.sh" | bash $BRANCH
               # 内核侧 KSU 版本来源对齐官方最新上传 Manager 构建：
-              # SukiSU 版本号 = 40000 + REPO_BRANCH 指向分支的提交数 - 2815
+              # SukiSU-Nova 版本号 = 40000 + REPO_BRANCH 指向分支的提交数 - 2815
               #（main 分支定义在 kernel/Kbuild，builtin 分支定义在 kernel/Makefile，
               #  优先 GitHub API，回退本地 rev-list）。将 REPO_BRANCH 改写为官方
               # 构建提交，保证内核 KSU 版本与拉取的管理器安装包严格一致
               if [ -n "$KSU_COMMIT" ] && [ "$BRANCH" != "-s main" ] && [ "$BRANCH" != "-s builtin" ]; then
-                echo "SukiSU 使用自定义提交（$BRANCH），跳过管理器版本对齐"
+                echo "SukiSU-Nova 使用自定义提交（$BRANCH），跳过管理器版本对齐"
               elif [ -n "$KSU_COMMIT" ]; then
                 if ! git -C KernelSU fetch origin "$KSU_COMMIT" 2>/dev/null; then
                   echo "官方构建提交 $KSU_COMMIT 已存在于本地克隆，跳过 fetch"
@@ -527,9 +527,9 @@ jobs:
                   echo "::error::未能在 $KSU_VERSION_SOURCE 中对齐 REPO_BRANCH（上游结构可能已变化），无法对齐管理器版本"
                   exit 1
                 fi
-                echo "SukiSU 内核侧版本来源已对齐官方上传构建提交 $KSU_COMMIT (KSU 版本 $((40000 + $(git -C KernelSU rev-list --count "$KSU_COMMIT") - 2815)))"
+                echo "SukiSU-Nova 内核侧版本来源已对齐官方上传构建提交 $KSU_COMMIT (KSU 版本 $((40000 + $(git -C KernelSU rev-list --count "$KSU_COMMIT") - 2815)))"
               fi
-              bash "$GITHUB_WORKSPACE/scripts/ksu_post_setup.sh" KernelSU sukisu
+              bash "$GITHUB_WORKSPACE/scripts/ksu_post_setup.sh" KernelSU sukisu-nova
               ;;
             "BakaSU")
               echo "添加 BakaSU..."
@@ -633,7 +633,7 @@ jobs:
                 && grep -q "^KSU_EXPECTED_HASH2 := " KernelSU/kernel/Kbuild \
                 && grep -q "^KSU_SECOND_SIGNATURE_RELEASE := 1" KernelSU/kernel/Kbuild \
                 || { echo "::error::Kbuild 注入失败（锚点行缺失，FinaSU 上游 Kbuild 结构可能已变化）"; exit 1; }
-              # 与 SukiSU/BakaSU 一致：内核完整版本的 @<branch> 固定为品牌名
+              # 与 SukiSU-Nova/BakaSU 一致：内核完整版本的 @<branch> 固定为品牌名
               # （CI 检出的是 detached 提交，abbrev-ref 显示 @HEAD）；
               # 必须在上方证书注入（awk 重写 Kbuild）之后调用
               bash "$GITHUB_WORKSPACE/scripts/ksu_post_setup.sh" KernelSU finasu
@@ -659,7 +659,7 @@ jobs:
             KSU_COUNT=$(git -C KernelSU rev-list --count "${{ inputs.ksu_commit }}" 2>/dev/null || echo "")
             if [ -n "$KSU_COUNT" ]; then
               case "${{ inputs.ksu_variant }}" in
-                SukiSU) KSU_VERSION=$((40000 + KSU_COUNT - 2815)) ;;
+                SukiSU-Nova) KSU_VERSION=$((40000 + KSU_COUNT - 2815)) ;;
                 BakaSU) KSU_VERSION=$((30700 + KSU_COUNT)) ;;
                 FinaSU) KSU_VERSION=$((30000 + KSU_COUNT)) ;;
               esac
@@ -674,10 +674,10 @@ jobs:
           echo "AnyKernel3 命名: $AK3_NAME"
 
       # FinaSU 的内核侧 SUSFS 集成已并入 scripts/susfs_fixes/apply.sh：
-      # 上游自 5b83330b（2026-10-23）起树内原生集成 SUSFS，与 SukiSU/BakaSU
+      # 上游自 5b83330b（2026-10-23）起树内原生集成 SUSFS，与 SukiSU-Nova/BakaSU
       # 同为「驱动侧不打补丁」形态，由「应用 SUSFS 补丁」步骤统一校验并应用
 
-      # SukiSU 的 builtin 分支（内建+SUSFS 产品线）与 main 分支相互独立，
+      # SukiSU-Nova 的 builtin 分支（内建+SUSFS 产品线）与 main 分支相互独立，
       # 官方管理器 APK 始终按 main 分支构建。main 抬升
       # KERNEL_SU_UAPI_VERSION 时（如 3b60791 UAPI 6 新增
       # KSU_IOCTL_LOOKUP_SYMBOLS + KSU_GET_INFO_FLAG_PREINIT），builtin
@@ -687,12 +687,12 @@ jobs:
       # 按 main 原文移植进 builtin 检出并抬升 UAPI 号，UAPI >= 6 时附带
       # 注入 LOOKUP_SYMBOLS 处理器 + symbol_resolver 内核侧能力；
       # 上游 builtin 自行同步后自动跳过，详见 scripts/ksu_uapi_sync/sync_uapi.sh
-      - name: 同步 SukiSU 内核 UAPI 版本（对齐官方管理器）
-        if: inputs.ksu_variant == 'SukiSU'
+      - name: 同步 SukiSU-Nova 内核 UAPI 版本（对齐官方管理器）
+        if: inputs.ksu_variant == 'SukiSU-Nova'
         working-directory: ${{ env.KERNEL_ROOT }}
         run: bash "$GITHUB_WORKSPACE/scripts/ksu_uapi_sync/sync_uapi.sh" KernelSU
 
-      # SukiSU builtin 分支的 hook/lsm_hook.c 仍以旧签名调用
+      # SukiSU-Nova builtin 分支的 hook/lsm_hook.c 仍以旧签名调用
       # security_add_hooks(hooks, count, "ksu")，6.8+ 内核要求 const struct lsm_id *，
       # GKI 编译直接失败；kpm super_access.c 引用的
       # netlink_kernel_cfg.cb_mutex 在 Linux 6.11 被移除，KPM 开启时同样失败
@@ -700,10 +700,10 @@ jobs:
       # lsm_id 仍走补丁；cb_mutex 改为按条件编译深度检测，只锚那一行注入
       # LINUX_VERSION_CODE 守卫，6.10 及以下内核行为不变；上游已自行用
       # #ifdef KSU_NETLINK_CFG_HAS_CB_MUTEX 守卫时按内容检测自动跳过。
-      - name: 应用 SukiSU 内核 API 兼容补丁 (6.8+ lsm_id / 6.11+ netlink cb_mutex)
-        if: inputs.ksu_variant == 'SukiSU'
+      - name: 应用 SukiSU-Nova 内核 API 兼容补丁 (6.8+ lsm_id / 6.11+ netlink cb_mutex)
+        if: inputs.ksu_variant == 'SukiSU-Nova'
         working-directory: ${{ env.KERNEL_ROOT }}
-        run: bash "$GITHUB_WORKSPACE/scripts/sukisu_compat/apply.sh" KernelSU
+        run: bash "$GITHUB_WORKSPACE/scripts/sukisu_nova_compat/apply.sh" KernelSU
 
       - name: 应用 SUSFS 补丁
         if: inputs.enable_susfs
@@ -1078,8 +1078,8 @@ jobs:
           # 版本补丁来源：SukiSU_patch/other/zram/zram_patch/<ver>/
           pick_zram_patch() {
             local name="$1"
-            if [ -f "$SUKISU_PATCHES/other/zram/zram_patch/${{ inputs.kernel_version }}/$name" ]; then
-              echo "$SUKISU_PATCHES/other/zram/zram_patch/${{ inputs.kernel_version }}/$name"
+            if [ -f "$SUKISU_NOVA_PATCHES/other/zram/zram_patch/${{ inputs.kernel_version }}/$name" ]; then
+              echo "$SUKISU_NOVA_PATCHES/other/zram/zram_patch/${{ inputs.kernel_version }}/$name"
             else
               echo ""
             fi
@@ -1091,8 +1091,8 @@ jobs:
           [ -d "$ZZH_PATCHES/zram/lz4" ] || MISSING="$MISSING zram/lz4"
           [ -f "$ZZH_PATCHES/zram/apply_lz4_neon.sh" ] || MISSING="$MISSING zram/apply_lz4_neon.sh"
           [ -d "$ZZH_PATCHES/zram/include/linux" ] || MISSING="$MISSING zram/include/linux"
-          [ -d "$SUKISU_PATCHES/other/zram/lz4k" ] || MISSING="$MISSING SukiSU_patch/other/zram/lz4k"
-          [ -d "$SUKISU_PATCHES/other/zram/lz4k_oplus" ] || MISSING="$MISSING SukiSU_patch/other/zram/lz4k_oplus"
+          [ -d "$SUKISU_NOVA_PATCHES/other/zram/lz4k" ] || MISSING="$MISSING SukiSU_patch/other/zram/lz4k"
+          [ -d "$SUKISU_NOVA_PATCHES/other/zram/lz4k_oplus" ] || MISSING="$MISSING SukiSU_patch/other/zram/lz4k_oplus"
           [ -n "$LZ4KD_PATCH" ] || MISSING="$MISSING SukiSU_patch/other/zram/zram_patch/${{ inputs.kernel_version }}/lz4kd.patch"
           [ -n "$LZ4K_OPLUS_PATCH" ] || MISSING="$MISSING SukiSU_patch/other/zram/zram_patch/${{ inputs.kernel_version }}/lz4k_oplus.patch"
           if [ -n "$MISSING" ]; then
@@ -1136,10 +1136,10 @@ jobs:
             echo "f2fs-\$(CONFIG_F2FS_IOSTAT) += iostat.o" >> "fs/f2fs/Makefile"
           fi
 
-          cp -r $SUKISU_PATCHES/other/zram/lz4k/include/linux/* ./include/linux/
-          cp -r $SUKISU_PATCHES/other/zram/lz4k/lib/* ./lib/
-          cp -r $SUKISU_PATCHES/other/zram/lz4k/crypto/* ./crypto/
-          cp -r $SUKISU_PATCHES/other/zram/lz4k_oplus ./lib/
+          cp -r $SUKISU_NOVA_PATCHES/other/zram/lz4k/include/linux/* ./include/linux/
+          cp -r $SUKISU_NOVA_PATCHES/other/zram/lz4k/lib/* ./lib/
+          cp -r $SUKISU_NOVA_PATCHES/other/zram/lz4k/crypto/* ./crypto/
+          cp -r $SUKISU_NOVA_PATCHES/other/zram/lz4k_oplus ./lib/
 
           cp "$LZ4KD_PATCH" ./lz4kd.patch
           if ! patch -p1 -F 3 < lz4kd.patch; then
@@ -1472,7 +1472,7 @@ jobs:
             echo 'CONFIG_KSU_FULL_NAME_FORMAT="%TAG_NAME%-%COMMIT_SHA%@%REPO_NAME%"' >> "$DEFCONFIG"
           fi
 
-          if [ "${{ inputs.ksu_variant }}" == "SukiSU" ] || [ "${{ inputs.ksu_variant }}" == "BakaSU" ]; then
+          if [ "${{ inputs.ksu_variant }}" == "SukiSU-Nova" ] || [ "${{ inputs.ksu_variant }}" == "BakaSU" ]; then
             if [[ "${{ inputs.use_kpm }}" == enabled* ]] || [[ "${{ inputs.use_kpm }}" == patched* ]]; then
               if grep -RqsE '^[[:space:]]*config[[:space:]]+KPM([[:space:]]|$)' common KernelSU 2>/dev/null; then
                 echo "CONFIG_KPM=y" >> "$DEFCONFIG"
@@ -1754,7 +1754,7 @@ jobs:
           compression-level: 9
 
       - name: 应用 KPM 补丁（构建期修补 Image）
-        if: startsWith(inputs.use_kpm, 'patched') && (inputs.ksu_variant == 'SukiSU' || inputs.ksu_variant == 'BakaSU')
+        if: startsWith(inputs.use_kpm, 'patched') && (inputs.ksu_variant == 'SukiSU-Nova' || inputs.ksu_variant == 'BakaSU')
         run: |
           set -e
           if [ "${{ inputs.android_version }}" == "android12" ] || [ "${{ inputs.android_version }}" == "android13" ]; then
@@ -1770,17 +1770,17 @@ jobs:
 
           cd "$TARGET_PATH"
           # patch_linux 为内置 kpimg 的 kptools：无参数运行时默认读取 ./Image 并输出 ./oImage
-          if ! cp -f "$SUKISU_PATCHES/kpm/patch_linux" ./patch; then
+          if ! cp -f "$SUKISU_NOVA_PATCHES/kpm/patch_linux" ./patch; then
             if [ "$SKIP_INCOMPATIBLE" = "true" ]; then
-              echo "::warning title=KPM 已跳过::未找到 KPM 修补工具 $SUKISU_PATCHES/kpm/patch_linux，已跳过 KPM 构建期修补，使用未修补 Image"
+              echo "::warning title=KPM 已跳过::未找到 KPM 修补工具 $SUKISU_NOVA_PATCHES/kpm/patch_linux，已跳过 KPM 构建期修补，使用未修补 Image"
               if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
                 echo "" >> "$GITHUB_STEP_SUMMARY"
-                echo "> ⏭️ **KPM（构建期修补）** 已自动跳过：未找到 KPM 修补工具 $SUKISU_PATCHES/kpm/patch_linux（构建未中断）" >> "$GITHUB_STEP_SUMMARY"
+                echo "> ⏭️ **KPM（构建期修补）** 已自动跳过：未找到 KPM 修补工具 $SUKISU_NOVA_PATCHES/kpm/patch_linux（构建未中断）" >> "$GITHUB_STEP_SUMMARY"
               fi
               echo "KPM_SKIPPED=true" >> "$GITHUB_ENV"
               exit 0
             fi
-            echo "::error::未找到 KPM 修补工具 $SUKISU_PATCHES/kpm/patch_linux"
+            echo "::error::未找到 KPM 修补工具 $SUKISU_NOVA_PATCHES/kpm/patch_linux"
             exit 1
           fi
           chmod 755 ./patch

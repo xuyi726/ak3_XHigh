@@ -15,14 +15,14 @@ on:
   workflow_dispatch:
     inputs:
       ksu_type:
-        description: '内置KernelSU(SukiSU/FinaSU/BakaSU/无内置KSU,默认FinaSU)'
+        description: '内置KernelSU(SukiSU-Nova/FinaSU/BakaSU/无内置KSU,默认FinaSU)'
         required: true
         type: choice
         default: 'finasu'
         options:
           - 'finasu'
           - 'bakasu'
-          - 'sukisu'
+          - 'sukisu-nova'
           - 'none'
       build_channel:
         description: '构建通道（正式=官方 Release 发行版，最新=上游最新提交）'
@@ -38,7 +38,7 @@ on:
         type: boolean
         default: 'true'
       kpm_enable:
-        description: '是否开启KPM内核模块支持(仅SukiSU生效; 需配合支持KPM的管理器使用, 不需要可保持默认关闭)'
+        description: '是否开启KPM内核模块支持(仅SukiSU-Nova生效; 需配合支持KPM的管理器使用, 不需要可保持默认关闭)'
         required: true
         type: boolean
         default: 'false'
@@ -123,7 +123,7 @@ jobs:
     uses: ./.github/workflows/get-manager.yml
     secrets: inherit
     with:
-      kernelsu_variant: ${{ inputs.ksu_type == 'finasu' && 'FinaSU' || inputs.ksu_type == 'bakasu' && 'BakaSU' || 'SukiSU' }}
+      kernelsu_variant: ${{ inputs.ksu_type == 'finasu' && 'FinaSU' || inputs.ksu_type == 'bakasu' && 'BakaSU' || 'SukiSU-Nova' }}
       build_channel: ${{ inputs.build_channel }}
       # 本工作流选项集与通用内核工作流不同，构建总结按 fastbuild 档案渲染
       summary_profile: fastbuild
@@ -151,10 +151,10 @@ jobs:
       actions: write
       contents: read
     steps:
-      # SukiSU 需要仓库内的 scripts/ksu_post_setup.sh、ksu_uapi_sync、sukisu_compat；
-      # 本工作流其余步骤都不依赖本仓库检出，故仅 SukiSU 时稀疏拉取 scripts/ 目录
+      # SukiSU-Nova 需要仓库内的 scripts/ksu_post_setup.sh、ksu_uapi_sync、sukisu_nova_compat；
+      # 本工作流其余步骤都不依赖本仓库检出，故仅 SukiSU-Nova 时稀疏拉取 scripts/ 目录
       - name: 检出构建脚本
-        if: inputs.ksu_type == 'sukisu'
+        if: inputs.ksu_type == 'sukisu-nova'
         uses: actions/checkout@v7
         with:
           sparse-checkout: |
@@ -390,17 +390,17 @@ jobs:
             # 与 BakaSU 内核侧版本号算法一致：30000 + 提交数 + 700
             KSU_VERSION=$(expr $(git rev-list --count HEAD) + 30700)
             echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
-          elif [[ ${{ github.event.inputs.ksu_type }} == "sukisu" ]]; then
-            echo "正在配置SukiSU..."
+          elif [[ ${{ github.event.inputs.ksu_type }} == "sukisu-nova" ]]; then
+            echo "正在配置SukiSU-Nova..."
             # 开启 SUSFS 时用 builtin 分支（内建 SUSFS 支持与 Inline hook），关闭时用 main
             if [[ "${{ github.event.inputs.susfs_enable }}" == "true" ]]; then
-              SUKISU_BRANCH=builtin
+              SUKISU_NOVA_BRANCH=builtin
             else
-              SUKISU_BRANCH=main
+              SUKISU_NOVA_BRANCH=main
             fi
-            curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s "$SUKISU_BRANCH"
+            curl -LSs "https://raw.githubusercontent.com/SukiSU-Nova/SukiSU-Nova/main/kernel/setup.sh" | bash -s "$SUKISU_NOVA_BRANCH"
             cd ./KernelSU
-            # 对齐 get-manager 选定的提交：SukiSU 的 builtin 分支与 main 内容不同，不能直接检出，
+            # 对齐 get-manager 选定的提交：SukiSU-Nova 的 builtin 分支与 main 内容不同，不能直接检出，
             # 改为把内核侧版本来源 REPO_BRANCH 改写为该提交（main 在 kernel/Kbuild，builtin 在 kernel/Makefile）
             if [ -n "$KSU_PIN" ]; then
               if ! git fetch -q origin "$KSU_PIN" 2>/dev/null; then
@@ -410,7 +410,7 @@ jobs:
                 echo "::error::管理器构建提交 $KSU_PIN 不在 KernelSU 仓库中，无法对齐版本来源"
                 exit 1
               fi
-              if [ "$SUKISU_BRANCH" = "builtin" ]; then
+              if [ "$SUKISU_NOVA_BRANCH" = "builtin" ]; then
                 KSU_VERSION_SOURCE="kernel/Makefile"
               else
                 KSU_VERSION_SOURCE="kernel/Kbuild"
@@ -418,9 +418,9 @@ jobs:
               sed -i -E "s|^(REPO_BRANCH[[:space:]]*[:?+]?=)[[:space:]]*main[[:space:]]*\$|\1 $KSU_PIN|" "$KSU_VERSION_SOURCE"
               grep -qE "^REPO_BRANCH[[:space:]]*[:?+]?=[[:space:]]*$KSU_PIN[[:space:]]*\$" "$KSU_VERSION_SOURCE" \
                 || { echo "::error::未能在 $KSU_VERSION_SOURCE 中对齐 REPO_BRANCH（上游结构可能已变化），无法对齐管理器版本"; exit 1; }
-              echo "SukiSU 内核侧版本来源已对齐管理器构建提交 $KSU_PIN (KSU 版本 $((40000 + $(git rev-list --count "$KSU_PIN") - 2815)))"
+              echo "SukiSU-Nova 内核侧版本来源已对齐管理器构建提交 $KSU_PIN (KSU 版本 $((40000 + $(git rev-list --count "$KSU_PIN") - 2815)))"
             fi
-            # 与 SukiSU 内核侧算法一致：40000 + 提交数 - 2815（官方管理器 versionCode 同源）
+            # 与 SukiSU-Nova 内核侧算法一致：40000 + 提交数 - 2815（官方管理器 versionCode 同源）
             if [ -n "$KSU_PIN" ]; then
               KSU_VERSION=$(expr $(git rev-list --count "$KSU_PIN") + 40000 - 2815)
             else
@@ -429,7 +429,7 @@ jobs:
             echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
             cd ..
             # 内核完整版本的 @<branch> 固定为品牌名（CI 检出非 main 分支时管理器显示 @xuyi）
-            bash "$GITHUB_WORKSPACE/scripts/ksu_post_setup.sh" KernelSU sukisu
+            bash "$GITHUB_WORKSPACE/scripts/ksu_post_setup.sh" KernelSU sukisu-nova
           else
             echo "已选择无内置KernelSU模式，跳过KernelSU配置..."
           fi
@@ -442,8 +442,8 @@ jobs:
             KSU_TYPENAME="FinaSU"
           elif [[ ${{ github.event.inputs.ksu_type }} == "bakasu" ]]; then
             KSU_TYPENAME="BakaSU"
-          elif [[ ${{ github.event.inputs.ksu_type }} == "sukisu" ]]; then
-            KSU_TYPENAME="SukiSU"
+          elif [[ ${{ github.event.inputs.ksu_type }} == "sukisu-nova" ]]; then
+            KSU_TYPENAME="SukiSU-Nova"
           else
             KSU_TYPENAME="none"
           fi
@@ -457,28 +457,28 @@ jobs:
           echo "AK3_NAME=$AK3_NAME" >> $GITHUB_ENV
           echo "AnyKernel3 命名: $AK3_NAME"
 
-      - name: 应用 SukiSU 内核兼容补丁
-        if: inputs.ksu_type == 'sukisu'
+      - name: 应用 SukiSU-Nova 内核兼容补丁
+        if: inputs.ksu_type == 'sukisu-nova'
         run: |
           cd kernel_workspace
           # builtin 与官方 main 的 UAPI 需对齐，否则管理器首页会提示"需要更新内核"
           bash "$GITHUB_WORKSPACE/scripts/ksu_uapi_sync/sync_uapi.sh" KernelSU
           # 6.8+ security_add_hooks 新签名 / builtin 的 seccomp 过滤模式 / 6.12 LSM static call 槽位（内容检测，上游已修复则自动跳过）
-          bash "$GITHUB_WORKSPACE/scripts/sukisu_compat/apply.sh" KernelSU
+          bash "$GITHUB_WORKSPACE/scripts/sukisu_nova_compat/apply.sh" KernelSU
 
       - name: 应用 KernelSU & SUSFS 补丁
         if: inputs.susfs_enable
         run: |
           cd kernel_workspace
           if [[ ${{ github.event.inputs.ksu_type }} != "none" ]]; then
-            if [[ "${{ github.event.inputs.ksu_type }}" == "sukisu" ]]; then
-              # SukiSU builtin 驱动无条件调用 priority uid filter 接口，cctv18 oki v2.3.0 没有这些符号；
+            if [[ "${{ github.event.inputs.ksu_type }}" == "sukisu-nova" ]]; then
+              # SukiSU-Nova builtin 驱动无条件调用 priority uid filter 接口，cctv18 oki v2.3.0 没有这些符号；
               # 改用 susfs4ksu gki-android16-6.12 (v2.4.0)，并交给 susfs_fixes 统一适配（守卫归一化等）
-              echo "正在添加susfs补丁（SukiSU: susfs4ksu gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}）..."
+              echo "正在添加susfs补丁（SukiSU-Nova: susfs4ksu gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}）..."
               git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu -b gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}
               KERNEL_ROOT="$(pwd)" SUSFS4KSU="$(pwd)/susfs4ksu" KERNEL_PATCHES="$(pwd)/kernel_patches" \
                 ANDROID_VERSION="${{ env.ANDROID_VERSION }}" KERNEL_VERSION="${{ env.KERNEL_VERSION }}" \
-                KSU_VARIANT=SukiSU OS_PATCH_LEVEL= LEGACY_SUKISU_CONFIG= SUB_LEVEL="${SUB_VERSION%%_*}" \
+                KSU_VARIANT=SukiSU-Nova OS_PATCH_LEVEL= LEGACY_SUKISU_NOVA_CONFIG= SUB_LEVEL="${SUB_VERSION%%_*}" \
                 bash "$GITHUB_WORKSPACE/scripts/susfs_fixes/apply.sh"
             else
               echo "正在添加susfs补丁..."
@@ -561,17 +561,17 @@ jobs:
               echo "::warning title=SUSFS Inline 不可用::当前 FinaSU 未提供 Inline hook 选项，使用默认 Tracepoint 后端"
             fi
           fi
-          # KPM 为 SukiSU 内核内置功能（CONFIG_KPM），其它变体无此配置项
+          # KPM 为 SukiSU-Nova 内核内置功能（CONFIG_KPM），其它变体无此配置项
           if [[ "${{ github.event.inputs.kpm_enable }}" == "true" ]]; then
-            if [[ "${{ github.event.inputs.ksu_type }}" == "sukisu" ]]; then
+            if [[ "${{ github.event.inputs.ksu_type }}" == "sukisu-nova" ]]; then
               if grep -RqsE '^[[:space:]]*config[[:space:]]+KPM([[:space:]]|$)' ./KernelSU/kernel/Kconfig 2>/dev/null; then
                 echo "CONFIG_KPM=y" >> ./common/arch/arm64/configs/gki_defconfig
-                echo "SukiSU: 已启用内核内置 KPM"
+                echo "SukiSU-Nova: 已启用内核内置 KPM"
               else
-                echo "::warning title=KPM 不可用::当前 SukiSU 代码未声明 CONFIG_KPM，已跳过 KPM 功能"
+                echo "::warning title=KPM 不可用::当前 SukiSU-Nova 代码未声明 CONFIG_KPM，已跳过 KPM 功能"
               fi
             else
-              echo "::warning title=KPM 不适用::KPM 仅对 SukiSU 生效，当前变体已忽略该选项"
+              echo "::warning title=KPM 不适用::KPM 仅对 SukiSU-Nova 生效，当前变体已忽略该选项"
             fi
           fi
           # 添加对 Mountify (backslashxx/mountify) 模块的支持
@@ -593,10 +593,10 @@ jobs:
           echo "CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y" >> ./common/arch/arm64/configs/gki_defconfig
           # 禁用 defconfig 检查
           sed -i 's/check_defconfig//' ./common/build.config.gki
-          # FinaSU Inline / SukiSU 的 preinit 需要 usr/include 中的 UAPI 头：SUSFS v2.4.0 的 fs/exec.c 直接调用
-          # ksu_setup_preinit_file / ksu_preinit_handle_post_execveat，SukiSU 的 Makefile 在缺头时会关闭 preinit，
+          # FinaSU Inline / SukiSU-Nova 的 preinit 需要 usr/include 中的 UAPI 头：SUSFS v2.4.0 的 fs/exec.c 直接调用
+          # ksu_setup_preinit_file / ksu_preinit_handle_post_execveat，SukiSU-Nova 的 Makefile 在缺头时会关闭 preinit，
           # 导致链接阶段报未定义符号；其余情况跳过安装以节省编译时间
-          if [[ $FINASU_INLINE == 1 || "${{ github.event.inputs.ksu_type }}" == "sukisu" ]]; then
+          if [[ $FINASU_INLINE == 1 || "${{ github.event.inputs.ksu_type }}" == "sukisu-nova" ]]; then
             echo "CONFIG_HEADERS_INSTALL=y" >> ./common/arch/arm64/configs/gki_defconfig
           else
             echo "CONFIG_HEADERS_INSTALL=n" >> ./common/arch/arm64/configs/gki_defconfig

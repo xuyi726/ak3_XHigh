@@ -12,7 +12,7 @@ on:
         required: true
         type: choice
         options:
-          - SukiSU
+          - SukiSU-Nova
           - BakaSU
           - FinaSU
         default: BakaSU
@@ -34,7 +34,7 @@ on:
         type: string
         default: ""
       use_kpm:
-        description: "KPM 功能（仅SukiSU支持）"
+        description: "KPM 功能（仅SukiSU-Nova支持）"
         required: true
         type: choice
         default: "disabled (关闭)"

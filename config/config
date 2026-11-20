@@ -1,5 +1,5 @@
 # ==================== 自定义提交配置 ====================
-# 本文件用于配置 SUSFS 和 SukiSU 仓库的自定义提交
+# 本文件用于配置 SUSFS 和 SukiSU-Nova 仓库的自定义提交
 #
 # 使用说明:
 #   1. 将 custom 设为 true 启用自定义提交功能
@@ -8,7 +8,7 @@
 #
 # 示例:
 #   gki-android14-6.1=abc123def456
-#   sukisu=def789abc123
+#   sukisu-nova=def789abc123
 #
 # ================================================================
 
@@ -22,6 +22,6 @@ gki-android13-5.15=
 gki-android14-6.1=
 gki-android15-6.6=
 
-# ==================== SukiSU 的 commit hash ====================
-# 仅当 custom=true 且使用 SukiSU 变体时生效
-sukisu=
+# ==================== SukiSU-Nova 的 commit hash ====================
+# 仅当 custom=true 且使用 SukiSU-Nova 变体时生效
+sukisu-nova=

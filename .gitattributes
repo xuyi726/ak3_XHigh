@@ -1,4 +1,4 @@
 # Unified patch payloads intentionally preserve space-prefixed blank context
 # lines and kernel-style tab indentation.
 security_patch/*.patch -whitespace
-scripts/sukisu_compat/*.patch -whitespace
+scripts/sukisu_nova_compat/*.patch -whitespace

@@ -171,9 +171,9 @@ jobs:
         id: get_version
         run: |
 
-          if [ "${{ inputs.kernelsu_variant }}" == "SukiSU" ]; then
-            echo "This is the SukiSU variant"
-            git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra.git KernelSU
+          if [ "${{ inputs.kernelsu_variant }}" == "SukiSU-Nova" ]; then
+            echo "This is the SukiSU-Nova variant"
+            git clone https://github.com/SukiSU-Nova/SukiSU-Nova.git KernelSU
           elif [ "${{ inputs.kernelsu_variant }}" == "BakaSU" ]; then
             echo "This is the BakaSU variant"
             git clone https://github.com/Baka-SU/BakaSU.git KernelSU
@@ -190,7 +190,7 @@ jobs:
           # 计算KSU版本号
           KSU_GIT_VERSION=$(git rev-list --count HEAD)
 
-          if [ "${{ inputs.kernelsu_variant }}" == "SukiSU" ]; then
+          if [ "${{ inputs.kernelsu_variant }}" == "SukiSU-Nova" ]; then
             KSU_VERSION=$((40000 + KSU_GIT_VERSION - 2815))
           elif [ "${{ inputs.kernelsu_variant }}" == "FinaSU" ]; then
             # FinaSU 内核 Kbuild 与管理器 build.gradle.kts 均以 30000 + git 提交数计算版本
@@ -227,7 +227,7 @@ jobs:
           echo "构建通道: $CHANNEL_RAW -> $CHANNEL_KIND (pin_mode=$PIN_MODE)"
 
           case "${{ inputs.kernelsu_variant }}" in
-            "SukiSU") REPO="SukiSU-Ultra/SukiSU-Ultra"; PREF="universal" ;;
+            "SukiSU-Nova") REPO="SukiSU-Nova/SukiSU-Nova"; PREF="universal" ;;
             "BakaSU") REPO="Baka-SU/BakaSU";           PREF="arm64" ;;
             "FinaSU") REPO="LyraVoid/FinaSU";          PREF="universal" ;;
             *) echo "::error::未知变体"; exit 1 ;;
@@ -332,7 +332,7 @@ jobs:
           VARIANT="${{ inputs.kernelsu_variant }}"
 
           case "$VARIANT" in
-            "SukiSU") REPO="SukiSU-Ultra/SukiSU-Ultra"; KSUM="manager"; EXPECTED_BRANCH="main" ;;
+            "SukiSU-Nova") REPO="SukiSU-Nova/SukiSU-Nova"; KSUM="manager"; EXPECTED_BRANCH="main" ;;
             "BakaSU") REPO="Baka-SU/BakaSU";           KSUM="manager"; EXPECTED_BRANCH="main" ;;
             "FinaSU") REPO="LyraVoid/FinaSU";          KSUM="manager"; EXPECTED_BRANCH="master" ;;
             *) echo "::error::未知变体: $VARIANT"; exit 1 ;;
@@ -370,7 +370,7 @@ jobs:
                 REL_COUNT=$(git -C KernelSU rev-list --count "$REL_COMMIT" 2>/dev/null || echo "")
                 if [ -n "$REL_COUNT" ]; then
                   case "$VARIANT" in
-                    SukiSU) REL_KSU_VERSION=$((40000 + REL_COUNT - 2815)) ;;
+                    SukiSU-Nova) REL_KSU_VERSION=$((40000 + REL_COUNT - 2815)) ;;
                     BakaSU) REL_KSU_VERSION=$((30700 + REL_COUNT)) ;;
                     FinaSU) REL_KSU_VERSION=$((30000 + REL_COUNT)) ;;
                   esac
@@ -465,7 +465,7 @@ jobs:
             exit 0
           fi
 
-          # ---------- 最新通道：官方 CI 构建的管理器（SukiSU / BakaSU / FinaSU） ----------
+          # ---------- 最新通道：官方 CI 构建的管理器（SukiSU-Nova / BakaSU / FinaSU） ----------
           get_manager_artifacts() {
             local artifacts="$1"
             if [ "$VARIANT" == "FinaSU" ]; then
@@ -485,7 +485,7 @@ jobs:
           # 版本号与管理器 versionCode 同源（提交数 + 偏移），用于按版本挑选构建
           ksu_version_of() {
             case "$1" in
-              SukiSU) echo $((40000 + $2 - 2815)) ;;
+              SukiSU-Nova) echo $((40000 + $2 - 2815)) ;;
               BakaSU) echo $((30700 + $2)) ;;
               FinaSU) echo $((30000 + $2)) ;;
             esac
@@ -555,7 +555,7 @@ jobs:
                 CREATED=$(printf '%s' "$RUNS" | jq -r ".workflow_runs[$INDEX].created_at")
                 # 正式通道：只认官方默认分支上传的构建（push 与 workflow_dispatch 均可，
                 # 手动触发常用于正式上传前测试），跳过 PR / 其他分支构建
-                #（SukiSU/BakaSU 为 main，FinaSU 为 master）
+                #（SukiSU-Nova/BakaSU 为 main，FinaSU 为 master）
                 # 最新通道：接受任意分支的构建（跳过 PR 构建），再按版本与 HEAD 匹配排序
                 if [ "${PIN_MODE:-pin}" = "head" ]; then
                   if [ "$EVENT" != "push" ] && [ "$EVENT" != "workflow_dispatch" ]; then
@@ -696,7 +696,7 @@ jobs:
           if [ -n "$PIN_COUNT" ]; then
             case "$VARIANT" in
               BakaSU) PINNED_KSU_VERSION=$((30700 + PIN_COUNT)) ;;
-              SukiSU) PINNED_KSU_VERSION=$((40000 + PIN_COUNT - 2815)) ;;
+              SukiSU-Nova) PINNED_KSU_VERSION=$((40000 + PIN_COUNT - 2815)) ;;
               FinaSU) PINNED_KSU_VERSION=$((30000 + PIN_COUNT)) ;;
               *)      PINNED_KSU_VERSION="" ;;
             esac
@@ -855,10 +855,10 @@ jobs:
           [ -n "$SUFFIX_ROW" ] || SUFFIX_ROW="默认"
           FB_TIME_ROW="${{ inputs.build_time }}"
           [ -n "$FB_TIME_ROW" ] || FB_TIME_ROW="内置默认（Mon Jul 20 18:34:35 UTC 2026）"
-          if [ "$PROFILE" = "fastbuild" ] && [ "$VARIANT" != "SukiSU" ]; then
+          if [ "$PROFILE" = "fastbuild" ] && [ "$VARIANT" != "SukiSU-Nova" ]; then
             case "$KPM_ROW" in
               *关闭*) : ;;
-              *) KPM_ROW="$KPM_ROW（仅 SukiSU 生效）" ;;
+              *) KPM_ROW="$KPM_ROW（仅 SukiSU-Nova 生效）" ;;
             esac
           fi
 
