@@ -542,13 +542,9 @@ jobs:
           echo "CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y" >> ./common/arch/arm64/configs/gki_defconfig
           # 禁用 defconfig 检查
           sed -i 's/check_defconfig//' ./common/build.config.gki
-          # SukiSU-Nova / FinaSU-Inline 的 preinit 需要 usr/include 中的 UAPI 头，缺头时 Makefile 会关闭 preinit 导致链接报未定义符号；
-          # 其余情况跳过安装以节省编译时间（6.6 无 Rust）
-          if [[ "${{ github.event.inputs.ksu_type }}" == "sukisu-nova" || "$FINASU_INLINE" == "1" ]]; then
-            echo "CONFIG_HEADERS_INSTALL=y" >> ./common/arch/arm64/configs/gki_defconfig
-          else
-            echo "CONFIG_HEADERS_INSTALL=n" >> ./common/arch/arm64/configs/gki_defconfig
-          fi
+          # 不覆盖 CONFIG_HEADERS_INSTALL：AOSP gki_defconfig 已自带 =y，prepare 阶段会把 UAPI 头装到 out/usr/include；
+          # FinaSU/SukiSU 的 preinit（含 FinaSU Inline 后端）依赖该头，缺头会关闭 preinit 导致链接报未定义符号
+          # （此前写成 =n 正是 6.6.118 首次构建失败的原因）
 
       - name: 启用网络功能增强优化配置
         if: inputs.better_net
