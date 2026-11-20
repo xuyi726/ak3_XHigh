@@ -1,0 +1,229 @@
+From: Sheng Yong <shengyong1@xiaomi.com>
+Subject: [PATCH] erofs: backport 'fsoffset' mount option to GKI 6.6.118
+
+Backport of upstream commit c36ec00d7f67590cb03e233959cd92fe969753a3
+("erofs: add 'fsoffset' mount option to specify filesystem offset"),
+adapted to the android15-6.6 GKI 6.6.118 erofs layout.
+
+Why: Xiaomi 15 series (SM8750) places the EROFS system image at a
+non-zero offset inside the partition. Stock GKI 6.6.118 lacks fsoffset,
+so system partitions mount at the wrong offset, font files read back
+truncated, and system_server crashes in minikin::FontFamily every few
+seconds -> bootloop. This is the boot-critical fix.
+
+6.6.118 adaptation (vs upstream 6.15+):
+- No sbi->dif0 / mdev.m_dif / fileio.c here: store offset in sbi->fsoff
+  and propagate via erofs_map_dev.m_fsoff; the iomap MAPPED path and the
+  z_erofs_submit_queue bio add m_fsoff.
+- erofs_bread takes a block address (not a byte offset): add buf->off to
+  the computed byte offset; erofs_init_metabuf seeds buf->off = fsoff.
+- 6.6.118 still assigns buf.inode directly at four sites that upstream
+  has since refactored through erofs_init_metabuf, so seed buf.off there
+  too: namei.c (dir blocks, x2), xattr.c (shared xattr via packed_inode),
+  zdata.c z_erofs_read_fragment (packed_inode fragments).
+- Validation uses errorfc + return -EINVAL (6.6.118 style) instead of
+  upstream invalfc.
+
+Co-authored-by: Sheng Yong <shengyong1@xiaomi.com>
+Co-authored-by: Wang Shuai <wangshuai12@xiaomi.com>
+---
+diff --git a/fs/erofs/data.c b/fs/erofs/data.c
+index 51250ac..99881cd 100644
+--- a/fs/erofs/data.c
++++ b/fs/erofs/data.c
+@@ -35,7 +35,7 @@ void *erofs_bread(struct erofs_buf *buf, erofs_blk_t blkaddr,
+ 		  enum erofs_kmap_type type)
+ {
+ 	struct inode *inode = buf->inode;
+-	erofs_off_t offset = (erofs_off_t)blkaddr << inode->i_blkbits;
++	erofs_off_t offset = ((erofs_off_t)blkaddr << inode->i_blkbits) + buf->off;
+ 	pgoff_t index = offset >> PAGE_SHIFT;
+ 	struct page *page = buf->page;
+ 	struct folio *folio;
+@@ -69,6 +69,7 @@ void *erofs_bread(struct erofs_buf *buf, erofs_blk_t blkaddr,
+ 
+ void erofs_init_metabuf(struct erofs_buf *buf, struct super_block *sb)
+ {
++	buf->off = EROFS_SB(sb)->fsoff;
+ 	if (erofs_is_fscache_mode(sb))
+ 		buf->inode = EROFS_SB(sb)->s_fscache->inode;
+ 	else
+@@ -209,6 +210,7 @@ int erofs_map_dev(struct super_block *sb, struct erofs_map_dev *map)
+ 	map->m_daxdev = EROFS_SB(sb)->dax_dev;
+ 	map->m_dax_part_off = EROFS_SB(sb)->dax_part_off;
+ 	map->m_fscache = EROFS_SB(sb)->s_fscache;
++	map->m_fsoff = EROFS_SB(sb)->fsoff;
+ 
+ 	if (map->m_deviceid) {
+ 		down_read(&devs->rwsem);
+@@ -226,6 +228,7 @@ int erofs_map_dev(struct super_block *sb, struct erofs_map_dev *map)
+ 		map->m_daxdev = dif->dax_dev;
+ 		map->m_dax_part_off = dif->dax_part_off;
+ 		map->m_fscache = dif->fscache;
++		map->m_fsoff = 0;
+ 		up_read(&devs->rwsem);
+ 	} else if (devs->extra_devices && !devs->flatdev) {
+ 		down_read(&devs->rwsem);
+@@ -245,6 +248,7 @@ int erofs_map_dev(struct super_block *sb, struct erofs_map_dev *map)
+ 				map->m_daxdev = dif->dax_dev;
+ 				map->m_dax_part_off = dif->dax_part_off;
+ 				map->m_fscache = dif->fscache;
++				map->m_fsoff = 0;
+ 				break;
+ 			}
+ 		}
+@@ -306,7 +310,7 @@ static int erofs_iomap_begin(struct inode *inode, loff_t offset, loff_t length,
+ 		iomap->private = buf.base;
+ 	} else {
+ 		iomap->type = IOMAP_MAPPED;
+-		iomap->addr = mdev.m_pa;
++		iomap->addr = mdev.m_fsoff + mdev.m_pa;
+ 		if (flags & IOMAP_DAX)
+ 			iomap->addr += mdev.m_dax_part_off;
+ 	}
+diff --git a/fs/erofs/internal.h b/fs/erofs/internal.h
+index bd7b71b..eb6e58c 100644
+--- a/fs/erofs/internal.h
++++ b/fs/erofs/internal.h
+@@ -135,6 +135,7 @@ struct erofs_sb_info {
+ 	struct erofs_dev_context *devs;
+ 	struct dax_device *dax_dev;
+ 	u64 dax_part_off;
++	u64 fsoff;
+ 	u64 total_blocks;
+ 	u32 primarydevice_blocks;
+ 
+@@ -217,6 +218,7 @@ struct erofs_buf {
+ 	struct inode *inode;
+ 	struct page *page;
+ 	void *base;
++	u64 off;
+ 	enum erofs_kmap_type kmap_type;
+ };
+ #define __EROFS_BUF_INITIALIZER	((struct erofs_buf){ .page = NULL })
+@@ -373,6 +375,7 @@ struct erofs_map_dev {
+ 	struct block_device *m_bdev;
+ 	struct dax_device *m_daxdev;
+ 	u64 m_dax_part_off;
++	u64 m_fsoff;
+ 
+ 	erofs_off_t m_pa;
+ 	unsigned int m_deviceid;
+diff --git a/fs/erofs/namei.c b/fs/erofs/namei.c
+index f0110a7..7df6034 100644
+--- a/fs/erofs/namei.c
++++ b/fs/erofs/namei.c
+@@ -100,6 +100,7 @@ static void *erofs_find_target_block(struct erofs_buf *target,
+ 		struct erofs_dirent *de;
+ 
+ 		buf.inode = dir;
++		buf.off = EROFS_I_SB(dir)->fsoff;
+ 		de = erofs_bread(&buf, mid, EROFS_KMAP);
+ 		if (!IS_ERR(de)) {
+ 			const int nameoff = nameoff_from_disk(de->nameoff, bsz);
+@@ -172,6 +173,7 @@ int erofs_namei(struct inode *dir, const struct qstr *name, erofs_nid_t *nid,
+ 	qn.name = name->name;
+ 	qn.end = name->name + name->len;
+ 	buf.inode = dir;
++	buf.off = EROFS_I_SB(dir)->fsoff;
+ 
+ 	ndirents = 0;
+ 	de = erofs_find_target_block(&buf, dir, &qn, &ndirents);
+diff --git a/fs/erofs/super.c b/fs/erofs/super.c
+index 901f803..72911b2 100644
+--- a/fs/erofs/super.c
++++ b/fs/erofs/super.c
+@@ -391,6 +391,7 @@ enum {
+ 	Opt_device,
+ 	Opt_fsid,
+ 	Opt_domain_id,
++	Opt_fsoffset,
+ 	Opt_err
+ };
+ 
+@@ -417,6 +418,7 @@ static const struct fs_parameter_spec erofs_fs_parameters[] = {
+ 	fsparam_string("device",	Opt_device),
+ 	fsparam_string("fsid",		Opt_fsid),
+ 	fsparam_string("domain_id",	Opt_domain_id),
++	fsparam_u64("fsoffset",		Opt_fsoffset),
+ 	{}
+ };
+ 
+@@ -531,6 +533,9 @@ static int erofs_fc_parse_param(struct fs_context *fc,
+ 		errorfc(fc, "%s option not supported", erofs_fs_parameters[opt].name);
+ 		break;
+ #endif
++	case Opt_fsoffset:
++		sbi->fsoff = result.uint_64;
++		break;
+ 	default:
+ 		return -ENOPARAM;
+ 	}
+@@ -624,6 +629,18 @@ static int erofs_fc_fill_super(struct super_block *sb, struct fs_context *fc)
+ 		}
+ 	}
+ 
++	if (sbi->fsoff) {
++		if (sbi->fsoff & (sb->s_blocksize - 1)) {
++			errorfc(fc, "fsoffset %llu is not aligned to block size %lu",
++				sbi->fsoff, sb->s_blocksize);
++			return -EINVAL;
++		}
++		if (erofs_is_fscache_mode(sb)) {
++			errorfc(fc, "cannot use fsoffset in fscache mode");
++			return -EINVAL;
++		}
++	}
++
+ 	if (test_opt(&sbi->opt, DAX_ALWAYS)) {
+ 		if (!sbi->dax_dev) {
+ 			errorfc(fc, "DAX unsupported by block device. Turning off DAX.");
+@@ -965,6 +982,8 @@ static int erofs_show_options(struct seq_file *seq, struct dentry *root)
+ 	if (sbi->domain_id)
+ 		seq_printf(seq, ",domain_id=%s", sbi->domain_id);
+ #endif
++	if (sbi->fsoff)
++		seq_printf(seq, ",fsoffset=%llu", sbi->fsoff);
+ 	return 0;
+ }
+ 
+diff --git a/fs/erofs/xattr.c b/fs/erofs/xattr.c
+index 09d3416..f2de699 100644
+--- a/fs/erofs/xattr.c
++++ b/fs/erofs/xattr.c
+@@ -491,10 +491,12 @@ int erofs_xattr_prefixes_init(struct super_block *sb)
+ 	if (!pfs)
+ 		return -ENOMEM;
+ 
+-	if (sbi->packed_inode)
++	if (sbi->packed_inode) {
+ 		buf.inode = sbi->packed_inode;
+-	else
++		buf.off = sbi->fsoff;
++	} else {
+ 		erofs_init_metabuf(&buf, sb);
++	}
+ 
+ 	for (i = 0; i < sbi->xattr_prefix_count; i++) {
+ 		void *ptr = erofs_read_metadata(sb, &buf, &pos, &len);
+diff --git a/fs/erofs/zdata.c b/fs/erofs/zdata.c
+index c2e03d9..ec98157 100644
+--- a/fs/erofs/zdata.c
++++ b/fs/erofs/zdata.c
+@@ -986,6 +986,7 @@ static int z_erofs_read_fragment(struct super_block *sb, struct page *page,
+ 		return -EFSCORRUPTED;
+ 
+ 	buf.inode = packed_inode;
++	buf.off = EROFS_SB(sb)->fsoff;
+ 	for (; cur < end; cur += cnt, pos += cnt) {
+ 		cnt = min_t(unsigned int, end - cur,
+ 			    sb->s_blocksize - erofs_blkoff(sb, pos));
+@@ -1743,7 +1744,7 @@ submit_bio_retry:
+ 				bio = bio_alloc(mdev.m_bdev, BIO_MAX_VECS,
+ 						REQ_OP_READ, GFP_NOIO);
+ 				bio->bi_end_io = z_erofs_submissionqueue_endio;
+-				bio->bi_iter.bi_sector = cur >> 9;
++				bio->bi_iter.bi_sector = (mdev.m_fsoff + cur) >> 9;
+ 				bio->bi_private = q[JQ_SUBMIT];
+ 				if (readahead)
+ 					bio->bi_opf |= REQ_RAHEAD;
