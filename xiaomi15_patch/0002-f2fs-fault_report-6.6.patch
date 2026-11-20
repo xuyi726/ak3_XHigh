@@ -1,0 +1,135 @@
+From: liujinbao1 <liujinbao1@xiaomi.com>
+Subject: [PATCH] f2fs: backport trace_f2fs_fault_report to GKI 6.6.118
+
+Backport of upstream commit f6b24566035835dc22796f24b1e8738581840b17
+("f2fs: Add trace_f2fs_fault_report"), adapted to android15-6.6 GKI
+6.6.118.
+
+Why: Xiaomi 15 series vendor_boot carries a telemetry module that
+attaches to the f2fs_fault_report tracepoint. Stock GKI 6.6.118 does not
+define it, so the module fails to register ("tracepoint f2fs_fault_report
+not found"). Secondary to the erofs fsoffset boot fix, but backported so
+the vendor module loads cleanly.
+
+6.6.118 adaptation (vs upstream 6.16+):
+- f2fs_stop_checkpoint lives in checkpoint.c here (upstream moved it to
+  super.c); the REPORT_FAULT_STOP_CP call is inserted there. The wrapper
+  f2fs_fault_report() is defined in super.c near f2fs_handle_error.
+- Trace header uses two-arg __assign_str(func, func) (6.6.118 style).
+- Added EXPORT_TRACEPOINT_SYMBOL_GPL(f2fs_fault_report) so the vendor
+  module can attach (upstream does not export it; GKI f2fs is built-in).
+
+Co-authored-by: liujinbao1 <liujinbao1@xiaomi.com>
+Co-authored-by: shengyong1 <shengyong1@xiaomi.com>
+---
+diff --git a/fs/f2fs/checkpoint.c b/fs/f2fs/checkpoint.c
+index 0deccad..70b1b51 100644
+--- a/fs/f2fs/checkpoint.c
++++ b/fs/f2fs/checkpoint.c
+@@ -49,6 +49,9 @@ EXPORT_SYMBOL_GPL(_trace_android_rvh_f2fs_down_read);
+ void f2fs_stop_checkpoint(struct f2fs_sb_info *sbi, bool end_io,
+ 						unsigned char reason)
+ {
++	if (reason != STOP_CP_REASON_SHUTDOWN)
++		f2fs_fault_report(sbi->sb, REPORT_FAULT_STOP_CP, __func__, reason);
++
+ 	f2fs_build_fault_attr(sbi, 0, 0);
+ 	if (!end_io)
+ 		f2fs_flush_merged_writes(sbi);
+diff --git a/fs/f2fs/f2fs.h b/fs/f2fs/f2fs.h
+index ea628fa..a3b378a 100644
+--- a/fs/f2fs/f2fs.h
++++ b/fs/f2fs/f2fs.h
+@@ -84,6 +84,15 @@ extern const char *f2fs_fault_name[FAULT_MAX];
+ #define DEFAULT_FAILURE_RETRY_COUNT		1
+ #endif
+ 
++enum {
++	REPORT_FAULT_NEED_FSCK,
++	REPORT_FAULT_STOP_CP,
++	REPORT_FAULT_MAX,
++};
++
++void f2fs_fault_report(struct super_block *sb, unsigned int err_code,
++			const char *func, unsigned int data);
++
+ /*
+  * For mount options
+  */
+@@ -2162,11 +2171,18 @@ static inline bool is_sbi_flag_set(struct f2fs_sb_info *sbi, unsigned int type)
+ 	return test_bit(type, &sbi->s_flag);
+ }
+ 
+-static inline void set_sbi_flag(struct f2fs_sb_info *sbi, unsigned int type)
++static inline void __set_sbi_flag(struct f2fs_sb_info *sbi, unsigned int type)
+ {
+ 	set_bit(type, &sbi->s_flag);
+ }
+ 
++#define set_sbi_flag(sbi, type)				\
++do {							\
++	__set_sbi_flag(sbi, type);			\
++	if ((type) == SBI_NEED_FSCK)			\
++		f2fs_fault_report(sbi->sb, REPORT_FAULT_NEED_FSCK, __func__, __LINE__);	\
++} while (0)
++
+ static inline void clear_sbi_flag(struct f2fs_sb_info *sbi, unsigned int type)
+ {
+ 	clear_bit(type, &sbi->s_flag);
+diff --git a/fs/f2fs/super.c b/fs/f2fs/super.c
+index 9afc2bb..fb3c7e0 100644
+--- a/fs/f2fs/super.c
++++ b/fs/f2fs/super.c
+@@ -4333,6 +4333,13 @@ void f2fs_handle_error(struct f2fs_sb_info *sbi, unsigned char error)
+ 	f2fs_record_errors(sbi, error);
+ }
+ 
++void f2fs_fault_report(struct super_block *sb, unsigned int err_code,
++			const char *func, unsigned int data)
++{
++	trace_f2fs_fault_report(sb, err_code, func, data);
++}
++EXPORT_TRACEPOINT_SYMBOL_GPL(f2fs_fault_report);
++
+ void f2fs_handle_error_async(struct f2fs_sb_info *sbi, unsigned char error)
+ {
+ 	f2fs_save_errors(sbi, error);
+diff --git a/include/trace/events/f2fs.h b/include/trace/events/f2fs.h
+index dd486ef..2b85582 100644
+--- a/include/trace/events/f2fs.h
++++ b/include/trace/events/f2fs.h
+@@ -2534,6 +2534,34 @@ DEFINE_EVENT(f2fs_priority_update, f2fs_priority_restore,
+ 	TP_ARGS(sbi, lock_name, is_write, p, orig_prio, new_prio)
+ );
+ 
++TRACE_EVENT(f2fs_fault_report,
++
++	TP_PROTO(struct super_block *sb, unsigned int err_code,
++		const char *func, unsigned int data),
++
++	TP_ARGS(sb, err_code, func, data),
++
++	TP_STRUCT__entry(
++		__field(dev_t, dev)
++		__field(unsigned int, err_code)
++		__string(func, func)
++		__field(unsigned int, data)
++	),
++
++	TP_fast_assign(
++		__entry->dev		= sb->s_dev;
++		__entry->err_code	= err_code;
++		__assign_str(func, func);
++		__entry->data		= data;
++	),
++
++	TP_printk("dev = (%d,%d), err_code = %u, func = %s, data = %u",
++		show_dev(__entry->dev),
++		__entry->err_code,
++		__get_str(func),
++		__entry->data)
++);
++
+ #endif /* _TRACE_F2FS_H */
+ 
+  /* This part must be outside protection */
