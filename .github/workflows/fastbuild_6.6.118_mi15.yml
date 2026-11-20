@@ -5,7 +5,7 @@
 #   纯 GKI 6.6.118 缺这两项会在小米15上 bootloop（system 分区偏移错→字体截断→system_server 崩溃）
 # 工具链：LLVM/Clang 18 (r510928)，6.6 无 Rust（gki_defconfig 用 C binder）
 # 相对 6.12.69 模板裁剪：lz4/zstd、lz4kd、ADIOS、Re-Kernel、Droidspaces（依赖树外代码或 6.12 专用补丁，
-#   纯净 AOSP 6.6 源码不含这些代码，强行开启只会无效或编译失败）；FinaSU 走默认 Tracepoint 后端（不启用 6.12 专用 Inline preinit）
+#   纯净 AOSP 6.6 源码不含这些代码，强行开启只会无效或编译失败）；FinaSU 优先走 Inline hook 后端、失败自动回退 Tracepoint（oki-6.6 补丁已内置 preinit 直调点）
 # 只产出 AnyKernel3 工件，不发布 Release
 name: (小米15专用) 6.6.118 GKI内核快速构建
 
@@ -461,7 +461,7 @@ jobs:
                 echo "::error::SUS_MAP 检查被错误插入 __show_smap"
                 exit 1
               fi
-              # 6.6 走 FinaSU 默认 Tracepoint 后端，不启用 6.12 专用 Inline preinit 补丁
+              # oki-6.6 补丁已内置 fs/exec.c preinit 直调点，无需 6.12 专用补充补丁；Inline hook 由「添加 KSU & 其他配置项」按需开启
               cd ..
             fi
           else
@@ -495,6 +495,19 @@ jobs:
           if [[ "${{ github.event.inputs.susfs_enable }}" == "false" ]]; then
             echo "CONFIG_KSU_SUSFS=n" >> ./common/arch/arm64/configs/gki_defconfig
           fi
+          # FinaSU + SUSFS：优先启用 SUSFS Inline hook 后端（oki-6.6 补丁已内置 fs/exec.c preinit 直调点）；
+          # 编译失败时在编译步骤自动回退到默认 Tracepoint
+          FINASU_INLINE=0
+          if [[ "${{ github.event.inputs.ksu_type }}" == "finasu" && "${{ github.event.inputs.susfs_enable }}" == "true" ]]; then
+            if grep -q '^config KSU_HOOK_SUSFS_INLINE' ./KernelSU/kernel/Kconfig 2>/dev/null \
+              && grep -qF 'ksu_setup_preinit_file(&filename' ./common/fs/exec.c; then
+              echo "CONFIG_KSU_HOOK_SUSFS_INLINE=y" >> ./common/arch/arm64/configs/gki_defconfig
+              FINASU_INLINE=1
+              echo "FinaSU: 已启用 SUSFS Inline hook 后端"
+            else
+              echo "::warning title=SUSFS Inline 不可用::FinaSU 未声明 Inline hook 或 fs/exec.c 缺 preinit 调用点，使用默认 Tracepoint 后端"
+            fi
+          fi
           # KPM 为 SukiSU-Nova 内核内置功能（CONFIG_KPM），其它变体无此配置项
           if [[ "${{ github.event.inputs.kpm_enable }}" == "true" ]]; then
             if [[ "${{ github.event.inputs.ksu_type }}" == "sukisu-nova" ]]; then
@@ -515,9 +528,9 @@ jobs:
           echo "CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y" >> ./common/arch/arm64/configs/gki_defconfig
           # 禁用 defconfig 检查
           sed -i 's/check_defconfig//' ./common/build.config.gki
-          # SukiSU-Nova 的 preinit 需要 usr/include 中的 UAPI 头，缺头时 Makefile 会关闭 preinit 导致链接报未定义符号；
-          # 其余情况跳过安装以节省编译时间（6.6 无 Rust，FinaSU 走 Tracepoint 不需要 Inline preinit 头）
-          if [[ "${{ github.event.inputs.ksu_type }}" == "sukisu-nova" ]]; then
+          # SukiSU-Nova / FinaSU-Inline 的 preinit 需要 usr/include 中的 UAPI 头，缺头时 Makefile 会关闭 preinit 导致链接报未定义符号；
+          # 其余情况跳过安装以节省编译时间（6.6 无 Rust）
+          if [[ "${{ github.event.inputs.ksu_type }}" == "sukisu-nova" || "$FINASU_INLINE" == "1" ]]; then
             echo "CONFIG_HEADERS_INSTALL=y" >> ./common/arch/arm64/configs/gki_defconfig
           else
             echo "CONFIG_HEADERS_INSTALL=n" >> ./common/arch/arm64/configs/gki_defconfig
@@ -766,7 +779,18 @@ jobs:
             KSU_KERNEL_DIR_ARG="KSU_KERNEL_DIR=$(pwd)/../KernelSU/kernel"
             echo "KSU_KERNEL_DIR=$(pwd)/../KernelSU/kernel"
           fi
-          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" OBJCOPY="llvm-objcopy" O=out $KSU_KERNEL_DIR_ARG Image
+          if ! make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" OBJCOPY="llvm-objcopy" O=out $KSU_KERNEL_DIR_ARG Image; then
+            # FinaSU SUSFS Inline 若编译失败，删掉该配置后回退默认 Tracepoint 后端重新编译
+            if grep -qx 'CONFIG_KSU_HOOK_SUSFS_INLINE=y' ./arch/arm64/configs/gki_defconfig; then
+              echo "::warning title=SUSFS Inline 编译失败::回退到默认 Tracepoint 后端重新编译"
+              sed -i '/^CONFIG_KSU_HOOK_SUSFS_INLINE=y$/d' ./arch/arm64/configs/gki_defconfig
+              make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="clang" LD="ld.lld" OBJCOPY="llvm-objcopy" O=out gki_defconfig
+              make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" OBJCOPY="llvm-objcopy" O=out $KSU_KERNEL_DIR_ARG Image
+              echo "已回退到默认 Tracepoint 后端完成编译"
+            else
+              exit 1
+            fi
+          fi
 
           # 编译后时间劫持二次校验
           echo "--- 编译后环境时间: $(LD_PRELOAD=$PRELOAD_LIBS date) ---"
