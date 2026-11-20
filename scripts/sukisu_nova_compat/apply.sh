@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SukiSU 内核源码 API 兼容补丁（SukiSU-Ultra builtin / main 分支均适用）
+# SukiSU-Nova 内核源码 API 兼容补丁（SukiSU-Nova builtin / main 分支均适用）
 #
 # 背景：
 #   1) builtin 分支 kernel/hook/lsm_hook.c 仍以旧签名
@@ -32,10 +32,10 @@ KSU_DIR="${1:-KernelSU}"
 
 fail() {
   if [ "$SKIP_INCOMPATIBLE" = "true" ]; then
-    echo "::warning title=SukiSU 兼容补丁已跳过::$1"
+    echo "::warning title=SukiSU-Nova 兼容补丁已跳过::$1"
     if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
       echo "" >> "$GITHUB_STEP_SUMMARY"
-      echo "> ⏭️ **SukiSU API 兼容补丁** 已自动跳过：$1（构建未中断）" >> "$GITHUB_STEP_SUMMARY"
+      echo "> ⏭️ **SukiSU-Nova API 兼容补丁** 已自动跳过：$1（构建未中断）" >> "$GITHUB_STEP_SUMMARY"
     fi
     exit 0
   fi
@@ -53,8 +53,8 @@ if [ -f "$LSM_FILE" ] && grep -q 'security_add_hooks(ksu_hooks, ARRAY_SIZE(ksu_h
     echo "lsm_hook.c 已包含 lsm_id 兼容代码，跳过"
   else
     echo "应用 lsm_id 兼容补丁 (6.8+ security_add_hooks 新签名)..."
-    patch -p1 --forward -d "$KSU_DIR" < "$COMPAT_DIR/sukisu-lsm-id-6.8.patch" \
-      || fail "lsm_id 兼容补丁应用失败（SukiSU 上游代码可能已变化）"
+    patch -p1 --forward -d "$KSU_DIR" < "$COMPAT_DIR/sukisu-nova-lsm-id-6.8.patch" \
+      || fail "lsm_id 兼容补丁应用失败（SukiSU-Nova 上游代码可能已变化）"
     grep -q 'struct lsm_id ksu_lsm_id' "$LSM_FILE" \
       || fail "lsm_id 兼容补丁应用后校验失败"
     echo "lsm_hook.c: 6.8+ 已切换为 struct lsm_id 注册"
@@ -68,7 +68,7 @@ fi
 # 任意条件编译包住 —— 按 DYNAMIC_STRUCT_BEGIN/END(netlink_kernel_cfg) 块里的
 # #if / #ifdef / #ifndef 与 #endif 深度判定，而不是认某个具体字符串。
 #
-# 为什么必须这么判：上游 SukiSU 自己治了这个问题，形态和我们旧补丁不同 ——
+# 为什么必须这么判：上游 SukiSU-Nova 自己治了这个问题，形态和我们旧补丁不同 ——
 #   #ifdef KSU_NETLINK_CFG_HAS_CB_MUTEX
 #   DEFINE_MEMBER(netlink_kernel_cfg, cb_mutex)
 #   #endif
@@ -82,7 +82,7 @@ fi
 #
 # 注入同样只锚这一行本身，前后长什么样都不影响；产物与旧补丁逐字节相同。
 # 重复执行幂等，上游自行修复后自动跳过。
-sukisu_cb_mutex_guard_state() {
+sukisu_nova_cb_mutex_guard_state() {
   # $1 = 目标文件；返回 0=已被条件编译守卫 1=裸露未守卫
   #             2=找不到 netlink_kernel_cfg 结构块 3=没有 cb_mutex 成员
   perl -e '
@@ -107,7 +107,7 @@ sukisu_cb_mutex_guard_state() {
   ' "$1"
 }
 
-sukisu_cb_mutex_guard_inject() {
+sukisu_nova_cb_mutex_guard_inject() {
   # $1 = 目标文件；只在 cb_mutex 那一行前后加守卫，保留原行尾风格
   perl -e '
     open(my $fh, "<", $ARGV[0]) or exit 4;
@@ -135,7 +135,7 @@ sukisu_cb_mutex_guard_inject() {
   ' "$1"
 }
 
-sukisu_cb_mutex_compat() {
+sukisu_nova_cb_mutex_compat() {
   local ksu="$1" rel="" cand f st=0
   # 位置随上游重构迁移过（kernel/kpm/ -> kernel/extension/kpm/），按实际路径定位，
   # 避免守卫路径写死导致静默跳过
@@ -154,7 +154,7 @@ sukisu_cb_mutex_compat() {
   fi
   f="$ksu/$rel"
 
-  sukisu_cb_mutex_guard_state "$f" || st=$?
+  sukisu_nova_cb_mutex_guard_state "$f" || st=$?
   case "$st" in
     0)
       echo "$rel: cb_mutex 成员已被条件编译守卫（上游自行处理），跳过"
@@ -182,18 +182,18 @@ sukisu_cb_mutex_compat() {
   esac
 
   echo "给 $rel 的 cb_mutex 成员加 6.11 版本守卫（按行锚定，不依赖上下文）..."
-  sukisu_cb_mutex_guard_inject "$f" \
-    || fail "cb_mutex 守卫注入失败（$rel 里那一行的形态不认识，SukiSU 上游代码可能又变了）"
+  sukisu_nova_cb_mutex_guard_inject "$f" \
+    || fail "cb_mutex 守卫注入失败（$rel 里那一行的形态不认识，SukiSU-Nova 上游代码可能又变了）"
 
   st=0
-  sukisu_cb_mutex_guard_state "$f" || st=$?
+  sukisu_nova_cb_mutex_guard_state "$f" || st=$?
   [ "$st" = 0 ] || fail "cb_mutex 守卫注入后校验失败（状态 $st）"
   grep -q 'KERNEL_VERSION(6, 11, 0)' "$f" \
     || fail "cb_mutex 注入后缺少 6.11 版本判据"
   echo "$rel: 6.11+ 已跳过 cb_mutex 成员"
 }
 
-sukisu_cb_mutex_compat "$KSU_DIR"
+sukisu_nova_cb_mutex_compat "$KSU_DIR"
 
 # ---- Seccomp 过滤模式（builtin 分支）----
 # 背景：builtin 分支在 app 启动路径（zygote setresuid 钩子）对管理器与授权
@@ -211,13 +211,13 @@ if [ -f "$LSM_FILE" ] && grep -q 'handle_zygote_setresuid' "$LSM_FILE"; then
     echo "lsm_hook.c 已包含 seccomp 过滤模式逻辑，跳过"
   else
     echo "应用 seccomp 过滤模式补丁 (对齐 main 分支/BakaSU：管理器与授权应用保留 seccomp 过滤器)..."
-    [ -d "$KSU_DIR/kernel/infra" ] || fail "未找到 $KSU_DIR/kernel/infra 目录，SukiSU builtin 结构可能已变化"
+    [ -d "$KSU_DIR/kernel/infra" ] || fail "未找到 $KSU_DIR/kernel/infra 目录，SukiSU-Nova builtin 结构可能已变化"
     cp "$COMPAT_DIR/seccomp_cache.h" "$KSU_DIR/kernel/infra/seccomp_cache.h" \
       || fail "seccomp_cache.h 分发失败"
     cp "$COMPAT_DIR/seccomp_cache.c" "$KSU_DIR/kernel/infra/seccomp_cache.c" \
       || fail "seccomp_cache.c 分发失败"
     python3 "$COMPAT_DIR/seccomp_filter_mode.py" "$KSU_DIR" \
-      || fail "seccomp 过滤模式补丁应用失败（SukiSU builtin 上游代码可能已变化）"
+      || fail "seccomp 过滤模式补丁应用失败（SukiSU-Nova builtin 上游代码可能已变化）"
     grep -q 'ksu_seccomp_allow_cache' "$LSM_FILE" \
       || fail "seccomp 过滤模式补丁应用后校验失败 (lsm_hook.c)"
     # 聚合编译文件随上游重构更名（kernel/ksu.c -> kernel/ksu_main.c），按实际路径校验
@@ -308,4 +308,4 @@ else
   echo "内核无 lsm_count.h 或 KSU 未用 security_add_hooks，跳过 LSM 槽位预留"
 fi
 
-echo "SukiSU API 兼容补丁处理完成"
+echo "SukiSU-Nova API 兼容补丁处理完成"

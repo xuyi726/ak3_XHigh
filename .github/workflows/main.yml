@@ -37,7 +37,7 @@ on:
         description: "KernelSU 变体"
         type: choice
         options:
-          - SukiSU
+          - SukiSU-Nova
           - BakaSU
           - FinaSU
         default: BakaSU
@@ -63,7 +63,7 @@ on:
         required: false
       # ==================== 选项配置 ====================
       use_kpm:
-        description: "KPM 功能（仅SukiSU支持）"
+        description: "KPM 功能（仅SukiSU-Nova支持）"
         type: choice
         default: "disabled (关闭)"
         options:
@@ -443,7 +443,7 @@ jobs:
         run: |
           # KSU 显示名称
           case "${{ inputs.kernelsu_variant }}" in
-            "SukiSU")    KSU_NAME="SukiSU" ;;
+            "SukiSU-Nova")    KSU_NAME="SukiSU-Nova" ;;
             "BakaSU")  KSU_NAME="BakaSU" ;;
             "FinaSU")  KSU_NAME="FinaSU" ;;
           esac
@@ -526,7 +526,7 @@ jobs:
       - name: 确定 KSU 引用
         run: |
           case "${{ inputs.kernelsu_variant }}" in
-            "SukiSU")
+            "SukiSU-Nova")
               if [ "${{ inputs.cancel_susfs }}" = "true" ]; then
                 BRANCH="main"
               else
@@ -548,14 +548,14 @@ jobs:
       - name: 获取 KernelSU 提交信息
         run: |
           case "${{ inputs.kernelsu_variant }}" in
-            "SukiSU") REPO_URL="https://github.com/SukiSU-Ultra/SukiSU-Ultra.git"; REPO_URL2="SukiSU-Ultra/SukiSU-Ultra" ;;
+            "SukiSU-Nova") REPO_URL="https://github.com/SukiSU-Nova/SukiSU-Nova.git"; REPO_URL2="SukiSU-Nova/SukiSU-Nova" ;;
             "BakaSU") REPO_URL="https://github.com/Baka-SU/BakaSU.git"; REPO_URL2="Baka-SU/BakaSU" ;;
             "FinaSU") REPO_URL="https://github.com/LyraVoid/FinaSU.git"; REPO_URL2="LyraVoid/FinaSU" ;;
           esac
 
-          if [ "${{ inputs.kernelsu_variant }}" = "SukiSU" ] && [ -f "config/config" ]; then
+          if [ "${{ inputs.kernelsu_variant }}" = "SukiSU-Nova" ] && [ -f "config/config" ]; then
             CUSTOM_ENABLED=$(grep "^custom=" config/config | cut -d'=' -f2)
-            CUSTOM_COMMIT=$(grep "^sukisu=" config/config | cut -d'=' -f2)
+            CUSTOM_COMMIT=$(grep "^sukisu-nova=" config/config | cut -d'=' -f2)
             if [ "$CUSTOM_ENABLED" = "true" ] && [ -n "$CUSTOM_COMMIT" ]; then
               KSU_REF="$CUSTOM_COMMIT"
               KSU_URL="https://github.com/$REPO_URL2/commit/$CUSTOM_COMMIT"

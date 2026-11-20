@@ -2,12 +2,12 @@
 
 # GKI KernelSU SUSFS
 
-**Automated GKI Kernel Builds | SukiSU / BakaSU / FinaSU + SUSFS Integration**
+**Automated GKI Kernel Builds | SukiSU-Nova / BakaSU / FinaSU + SUSFS Integration**
 
 [![Release](https://img.shields.io/github/v/release/LingLuo17/AnyKernel3?label=Release&style=flat-square&logo=github&logoColor=white&color=2ea44f)](https://github.com/LingLuo17/AnyKernel3/releases)
 [![Coolapk](https://img.shields.io/badge/Follow-Coolapk-3DDC84?style=flat-square&logo=android&logoColor=white)](http://www.coolapk.com/u/38407386)
 [<img src="https://img.shields.io/badge/Join-QQ%20Group-blue?style=flat-square&logo=github&logoColor=white">](https://qm.qq.com/q/PZIFvlcbqU)
-[![SukiSU](https://img.shields.io/badge/SukiSU-Supported-5AA300?style=flat-square)](https://sukisu.org/)
+[![SukiSU-Nova](https://img.shields.io/badge/SukiSU_Nova-Supported-5AA300?style=flat-square)](https://sukisu.org/)
 [![BakaSU](https://img.shields.io/badge/BakaSU-Supported-5AA300?style=flat-square)](https://bakasu.org/)
 [![FinaSU](https://img.shields.io/badge/FinaSU-Supported-5AA300?style=flat-square)](https://github.com/LyraVoid/FinaSU)
 [![SUSFS](https://img.shields.io/badge/SUSFS-Integrated-E67E22?style=flat-square)](https://gitlab.com/simonpunk/susfs4ksu)
@@ -38,7 +38,7 @@ Built upon [AnyKernel3](https://github.com/osm0sis/AnyKernel3), this repository 
 
 | Feature | Description |
 |:---|:---|
-|  KernelSU Variants | Supports SukiSU / BakaSU / FinaSU variants, selectable at build time |
+|  KernelSU Variants | Supports SukiSU-Nova / BakaSU / FinaSU variants, selectable at build time |
 |  Build Channel | Release: latest **stable** upstream Release (tag commit + same-version manager), falls back to the newest official default-branch build when the upstream only ships pre-releases; Latest: pins the default-branch HEAD and picks the newest manager build matching that version |
 |  SUSFS | Kernel-level hiding working with KSU to complete environment spoofing |
 |  ZRAM LZ4 | ZRAM Compression Algorithm Patch |
@@ -56,10 +56,10 @@ Built upon [AnyKernel3](https://github.com/osm0sis/AnyKernel3), this repository 
 2. Go to the **Actions** page and pick the workflow for your kernel version
 3. Click **Run workflow** and fill in the parameters as needed:
    - `android_version` / `kernel_version` / `sub_level` / `os_patch_level`
-   - `ksu_variant`: KernelSU variant (SukiSU / BakaSU / FinaSU)
+   - `ksu_variant`: KernelSU variant (SukiSU-Nova / BakaSU / FinaSU)
    - `build_channel`: build channel
      - `正式 (Release)`: manager APK taken from the latest **stable** upstream Release (`prerelease=false`) and the kernel pinned to that release tag commit, so manager and kernel versions match exactly; when the upstream only ships rc/pre-releases (e.g. BakaSU), the newest official default-branch build is used and pinned instead
-     - `最新 (HEAD)`: kernel pinned to the default-branch HEAD, and the manager is the newest build whose version matches HEAD (any branch; SukiSU / BakaSU use official CI builds, FinaSU uses the latest Release), so kernel and manager never drift apart
+     - `最新 (HEAD)`: kernel pinned to the default-branch HEAD, and the manager is the newest build whose version matches HEAD (any branch; SukiSU-Nova / BakaSU use official CI builds, FinaSU uses the latest Release), so kernel and manager never drift apart
      - Both channels print the selected channel, pinned commit and manager version in the logs and the run summary
    - Feature switches: `enable_susfs`, `use_zram`, `use_bbg`, `use_net_enhance`, `use_kpm`, `skip_incompatible`, etc.
 4. Once the build finishes, download the **Artifacts** from the run page:
@@ -70,21 +70,21 @@ Built upon [AnyKernel3](https://github.com/osm0sis/AnyKernel3), this repository 
 
 ## 🔧 Custom Commit Configuration
 
-The [`config/config`](config/config) file lets you pin specific commits for SUSFS and SukiSU.
+The [`config/config`](config/config) file lets you pin specific commits for SUSFS and SukiSU-Nova.
 
 **What is a commit?**
 
-A commit is a hash string representing the state of a repository at a certain point in time. For example, setting SukiSU to `4b8644515fe6d87a109129e590ccd9d33a855dca` means the kernel will be built with the SukiSU version from January 30.
+A commit is a hash string representing the state of a repository at a certain point in time. For example, setting SukiSU-Nova to `4b8644515fe6d87a109129e590ccd9d33a855dca` means the kernel will be built with the SukiSU-Nova version from January 30.
 
 **Why pin a commit?**
 
 - Roll back to a stable version when upstream updates introduce bugs or compatibility issues
-- Manually specify a compatible version when SUSFS and SukiSU are out of sync and the build fails
+- Manually specify a compatible version when SUSFS and SukiSU-Nova are out of sync and the build fails
 
 **How to get a commit hash?**
 
 - SUSFS: [susfs4ksu](https://gitlab.com/simonpunk/susfs4ksu) (GitLab → Repository → Commits)
-- SukiSU: [SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra/commits) (GitHub commit history page)
+- SukiSU-Nova: [SukiSU-Nova](https://github.com/SukiSU-Nova/SukiSU-Nova/commits) (GitHub commit history page)
 
 ## 🛠️ Recommended After Installation
 ### 🔧 Xposed Modules
@@ -96,7 +96,7 @@ A commit is a hash string representing the state of a repository at a certain po
 
 - [osm0sis/AnyKernel3](https://github.com/osm0sis/AnyKernel3)
 - [zzh20188/GKI_KernelSU_SUSFS](https://github.com/zzh20188/GKI_KernelSU_SUSFS) / [WildKernels/GKI_KernelSU_SUSFS](https://github.com/WildKernels/GKI_KernelSU_SUSFS) / [LingLuo17/Anykernel3](https://github.com/LingLuo17/Anykernel3)
-- [SukiSU](https://sukisu.org/) / [BakaSU](https://bakasu.org/) / [FinaSU](https://github.com/LyraVoid/FinaSU)
+- [SukiSU-Nova](https://sukisu.org/) / [BakaSU](https://bakasu.org/) / [FinaSU](https://github.com/LyraVoid/FinaSU)
 - [SUSFS](https://gitlab.com/simonpunk/susfs4ksu)
 - [cctv18/oppo_oplus_realme_sm8850](https://github.com/cctv18/oppo_oplus_realme_sm8850)
 
