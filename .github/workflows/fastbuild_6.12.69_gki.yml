@@ -487,7 +487,26 @@ jobs:
               cp ./susfs4ksu/kernel_patches/fs/* ./common/fs/
               cp ./susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
               cd ./common
-              patch -p1 -F 3 < 50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch || true
+              # 新基线把 show_smap 的展示逻辑拆进 void __show_smap，并把 vma_pages() 改名 vma_data_pages()；
+              # cctv18 oki 补丁该 hunk 仍是旧上下文，-F 3 会把 SUS_MAP 检查插进 __show_smap（void 函数 return 0，编译失败）。
+              # 仅当源码已是新基线且补丁仍是旧上下文时，改写补丁的上下文行。
+              SUSFS_PATCH_FILE="50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch"
+              if grep -qF 'vma_data_pages(' fs/proc/task_mmu.c \
+                && ! grep -qF 'if (!vma_pages(vma))' fs/proc/task_mmu.c \
+                && grep -qF 'if (!vma_pages(vma))' "$SUSFS_PATCH_FILE"; then
+                echo "调整 SUSFS 补丁上下文：vma_pages -> vma_data_pages（show_smap 基线变化）"
+                sed -i 's/^ \(.*\)if (!vma_pages(vma))$/ \1if (!vma_data_pages(vma))/' "$SUSFS_PATCH_FILE"
+              fi
+              patch -p1 -F 3 < "$SUSFS_PATCH_FILE" || true
+              # SUS_MAP 检查必须落在 show_smap；模糊匹配落到别处时立即失败，避免到编译阶段才发现
+              if ! awk '/^static int show_smap\(/,/^}/' fs/proc/task_mmu.c | grep -q 'SUSFS_IS_INODE_SUS_MAP'; then
+                echo "::error::SUS_MAP 检查未落入 show_smap（SUSFS 补丁上下文与当前内核源码不匹配）"
+                exit 1
+              fi
+              if awk '/^static void __show_smap\(/,/^}/' fs/proc/task_mmu.c | grep -q 'SUSFS_IS_INODE_SUS_MAP'; then
+                echo "::error::SUS_MAP 检查被错误插入 __show_smap"
+                exit 1
+              fi
               # FinaSU 的 Inline 后端还要求 fs/exec.c 中的 preinit 直调点，cctv18 补丁未包含
               if [[ "${{ github.event.inputs.ksu_type }}" == "finasu" ]] && grep -q '^config KSU_HOOK_SUSFS_INLINE' ../KernelSU/kernel/Kconfig; then
                 echo "正在补充 FinaSU Inline 所需的 preinit 调用点..."
