@@ -104,9 +104,9 @@ jobs:
     with:
       kernelsu_variant: ${{ inputs.ksu_type == 'finasu' && 'FinaSU' || inputs.ksu_type == 'bakasu' && 'BakaSU' || 'SukiSU-Nova' }}
       build_channel: ${{ inputs.build_channel }}
-      # 本工作流选项集与通用内核工作流不同，构建总结按 fastbuild 档案渲染；
+      # 本工作流选项集与通用内核/6.12 快速构建都不同，构建总结按 mi15 档案渲染（只列真实选项 + 开机回移补丁行）；
       # 已裁剪 lz4/lz4kd/adios/rekernel/droidspaces，对应 use_* 不传，沿用 get-manager 默认关闭
-      summary_profile: fastbuild
+      summary_profile: mi15
       cancel_susfs: ${{ !inputs.susfs_enable }}
       use_bbg: ${{ inputs.baseband_guard }}
       use_net_enhance: ${{ inputs.better_net }}

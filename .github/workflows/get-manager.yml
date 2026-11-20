@@ -58,7 +58,7 @@ on:
         type: boolean
         default: false
       summary_profile:
-        description: "构建总结档案：kernel=通用内核工作流；fastbuild=6.12.69 快速构建（选项集不同）"
+        description: "构建总结档案：kernel=通用内核工作流；fastbuild=6.12.69 快速构建；mi15=小米15专用 6.6.118（选项集各异）"
         required: false
         type: string
         default: "kernel"
@@ -839,7 +839,7 @@ jobs:
           TIME_ROW="${{ inputs.build_time }}"
           [ -n "$TIME_ROW" ] || TIME_ROW="自动（当前北京时间）"
 
-          # fastbuild 档案：该工作流的选项集与通用内核工作流不同，单独成表
+          # fastbuild / mi15 档案：选项集与通用内核工作流不同，各自单独成表
           PROFILE="${{ inputs.summary_profile }}"
           case "${{ inputs.droidspaces_mode }}" in
             standard) DS_MODE_ROW="✅ 开启（含 NTSync）" ;;
@@ -855,7 +855,7 @@ jobs:
           [ -n "$SUFFIX_ROW" ] || SUFFIX_ROW="默认"
           FB_TIME_ROW="${{ inputs.build_time }}"
           [ -n "$FB_TIME_ROW" ] || FB_TIME_ROW="内置默认（Mon Jul 20 18:34:35 UTC 2026）"
-          if [ "$PROFILE" = "fastbuild" ] && [ "$VARIANT" != "SukiSU-Nova" ]; then
+          if { [ "$PROFILE" = "fastbuild" ] || [ "$PROFILE" = "mi15" ]; } && [ "$VARIANT" != "SukiSU-Nova" ]; then
             case "$KPM_ROW" in
               *关闭*) : ;;
               *) KPM_ROW="$KPM_ROW（仅 SukiSU-Nova 生效）" ;;
@@ -881,6 +881,17 @@ jobs:
               echo "| 网络功能拓展 | $(flag "${{ inputs.use_net_enhance }}") |"
               echo "| ADIOS IO 调度器 | $(flag "${{ inputs.use_adios }}") |"
               echo "| Re-Kernel | $(flag "${{ inputs.use_rekernel }}") |"
+              echo "| 内核级基带保护 | $(flag "${{ inputs.use_bbg }}") |"
+              echo "| ccache 缓存更新 | $(flag "${{ inputs.ccache_update }}") |"
+              echo "| ccache 调试日志 | $(flag "${{ inputs.ccache_debug }}") |"
+              echo "| 内核后缀 | $SUFFIX_ROW |"
+              echo "| 自定义构建时间 | $FB_TIME_ROW |"
+            elif [ "$PROFILE" = "mi15" ]; then
+              echo "| 小米15开机回移补丁 | ✅ erofs-fsoffset + f2fs-fault_report |"
+              echo "| SUSFS | $SUS_ROW |"
+              echo "| KPM | $KPM_ROW |"
+              echo "| BBR 算法 | $BBR_ROW |"
+              echo "| 网络功能拓展 | $(flag "${{ inputs.use_net_enhance }}") |"
               echo "| 内核级基带保护 | $(flag "${{ inputs.use_bbg }}") |"
               echo "| ccache 缓存更新 | $(flag "${{ inputs.ccache_update }}") |"
               echo "| ccache 调试日志 | $(flag "${{ inputs.ccache_debug }}") |"
