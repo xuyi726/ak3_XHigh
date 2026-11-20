@@ -507,14 +507,19 @@ jobs:
                 echo "::error::SUS_MAP 检查被错误插入 __show_smap"
                 exit 1
               fi
-              # FinaSU 的 Inline 后端还要求 fs/exec.c 中的 preinit 直调点，cctv18 补丁未包含
+              # FinaSU 的 Inline 后端还要求 fs/exec.c 中的 preinit 直调点；cctv18 新补丁已内置，
+              # 仅当 exec.c 缺失调用点时才补（幂等，避免与内置代码重复叠加）
               if [[ "${{ github.event.inputs.ksu_type }}" == "finasu" ]] && grep -q '^config KSU_HOOK_SUSFS_INLINE' ../KernelSU/kernel/Kconfig; then
-                echo "正在补充 FinaSU Inline 所需的 preinit 调用点..."
-                wget -q "https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/finasu_inline_preinit_6.12.patch" -O /tmp/finasu_inline_preinit_6.12.patch
-                patch -p1 -F 3 < /tmp/finasu_inline_preinit_6.12.patch
-                grep -q 'preinit_fd = ksu_setup_preinit_file(&filename' fs/exec.c \
-                  && grep -q 'ksu_preinit_handle_post_execveat(&fd' fs/exec.c \
-                  || { echo "::error::FinaSU Inline preinit 调用点补丁应用失败"; exit 1; }
+                if grep -qF 'ksu_setup_preinit_file(&filename' fs/exec.c; then
+                  echo "cctv18 补丁已内置 preinit 调用点，跳过补充补丁"
+                else
+                  echo "正在补充 FinaSU Inline 所需的 preinit 调用点..."
+                  wget -q "https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/finasu_inline_preinit_6.12.patch" -O /tmp/finasu_inline_preinit_6.12.patch
+                  patch -p1 -F 3 < /tmp/finasu_inline_preinit_6.12.patch
+                  grep -q 'preinit_fd = ksu_setup_preinit_file(&filename' fs/exec.c \
+                    && grep -q 'ksu_preinit_handle_post_execveat(&fd' fs/exec.c \
+                    || { echo "::error::FinaSU Inline preinit 调用点补丁应用失败"; exit 1; }
+                fi
               fi
               cd ..
             fi
