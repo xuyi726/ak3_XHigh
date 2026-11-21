@@ -469,11 +469,19 @@ jobs:
               cp ./susfs4ksu/kernel_patches/fs/* ./common/fs/
               cp ./susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
               cd ./common
-              # 6.6.118 已拆分 show_smap/__show_smap 但仍用 vma_pages()；仅当源码改名为 vma_data_pages 且补丁仍是旧上下文时才改写
+              # 补丁上下文跟随 cctv18 分支上游，可能与钉住的 6.6.118 源码命名不一致；
+              # 按源码实际写法改写补丁的上下文行（只改上下文行、不动新增代码），避免依赖 patch 模糊匹配
               SUSFS_PATCH_FILE="50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch"
-              if grep -qF 'vma_data_pages(' fs/proc/task_mmu.c \
+              if grep -qF 'if (!vma_pages(vma))' fs/proc/task_mmu.c \
+                && ! grep -qF 'if (!vma_data_pages(vma))' fs/proc/task_mmu.c \
+                && grep -qF 'if (!vma_data_pages(vma))' "$SUSFS_PATCH_FILE" \
+                && ! grep -qF 'if (!vma_pages(vma))' "$SUSFS_PATCH_FILE"; then
+                echo "调整 SUSFS 补丁上下文：vma_data_pages -> vma_pages（6.6.118 基线）"
+                sed -i 's/^ \(.*\)if (!vma_data_pages(vma))$/ \1if (!vma_pages(vma))/' "$SUSFS_PATCH_FILE"
+              elif grep -qF 'if (!vma_data_pages(vma))' fs/proc/task_mmu.c \
                 && ! grep -qF 'if (!vma_pages(vma))' fs/proc/task_mmu.c \
-                && grep -qF 'if (!vma_pages(vma))' "$SUSFS_PATCH_FILE"; then
+                && grep -qF 'if (!vma_pages(vma))' "$SUSFS_PATCH_FILE" \
+                && ! grep -qF 'if (!vma_data_pages(vma))' "$SUSFS_PATCH_FILE"; then
                 echo "调整 SUSFS 补丁上下文：vma_pages -> vma_data_pages（show_smap 基线变化）"
                 sed -i 's/^ \(.*\)if (!vma_pages(vma))$/ \1if (!vma_data_pages(vma))/' "$SUSFS_PATCH_FILE"
               fi
