@@ -1,4 +1,4 @@
-# 结构移植自本仓库 fastbuild_6.12.69_gki.yml，专用于米系6.6.118（SM8750：dada/haotian/xuanyuan）
+# 结构移植自本仓库 fastbuild_6.12.69_gki.yml，专用于小米系6.6.118（SM8750：dada/haotian/xuanyuan）
 # 仅编译 android15-6.6 GKI 6.6.118，源码固定到 AOSP 提交 7218e25a44f414ea0275b309319cc11a48290124
 # 开机关键：回移两个上游（小米作者）补丁——
 #   erofs fsoffset (c36ec00d7f67) + f2fs fault_report (f6b245660358)，见 xiaomi15_patch/
@@ -8,7 +8,7 @@
 #   纯净 AOSP 6.6 源码不含这些代码，强行开启只会无效或编译失败）；SUSFS 统一用 susfs4ksu（与主 6.6 管线同源），
 #   FinaSU 优先走 Inline hook 后端、由自带检查脚本判定，失败自动回退 Tracepoint
 # 只产出 AnyKernel3 工件，不发布 Release
-name: (米系6.6.118专用)GKI内核快速构建
+name: (小米系6.6.118专用)GKI内核快速构建
 
 env:
   TZ: Asia/Shanghai
