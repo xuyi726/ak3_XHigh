@@ -682,6 +682,10 @@ jobs:
           else
             AK3_NAME="${{ inputs.ksu_variant }}_kernel-${CONFIG}"
           fi
+          # 6.6.118 的 Android 17 兼容包用于红米机型，名称追加(红米系)区分
+          if [[ "${{ inputs.kernel_version }}" == "6.6" && "$ACTUAL_SUBLEVEL" == "118" && "${{ inputs.a17_compat }}" == "true" ]]; then
+            AK3_NAME="${AK3_NAME}(红米系)"
+          fi
           echo "AK3_NAME=$AK3_NAME" >> $GITHUB_ENV
           echo "AnyKernel3 命名: $AK3_NAME"
 

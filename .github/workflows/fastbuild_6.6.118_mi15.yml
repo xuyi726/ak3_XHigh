@@ -422,6 +422,7 @@ jobs:
           else
             AK3_NAME="${KSU_TYPENAME}_kernel-${CONFIG}"
           fi
+          AK3_NAME="${AK3_NAME}(小米系)"
           echo "KSU_TYPENAME=$KSU_TYPENAME" >> $GITHUB_ENV
           echo "AK3_NAME=$AK3_NAME" >> $GITHUB_ENV
           echo "AnyKernel3 命名: $AK3_NAME"
