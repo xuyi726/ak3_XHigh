@@ -5,7 +5,8 @@
 #   纯 GKI 6.6.118 缺这两项会在小米15上 bootloop（system 分区偏移错→字体截断→system_server 崩溃）
 # 工具链：LLVM/Clang 18 (r510928)，6.6 无 Rust（gki_defconfig 用 C binder）
 # 相对 6.12.69 模板裁剪：lz4/zstd、lz4kd、ADIOS、Re-Kernel、Droidspaces（依赖树外代码或 6.12 专用补丁，
-#   纯净 AOSP 6.6 源码不含这些代码，强行开启只会无效或编译失败）；FinaSU 优先走 Inline hook 后端、失败自动回退 Tracepoint（oki-6.6 补丁已内置 preinit 直调点）
+#   纯净 AOSP 6.6 源码不含这些代码，强行开启只会无效或编译失败）；SUSFS 统一用 susfs4ksu（与主 6.6 管线同源），
+#   FinaSU 优先走 Inline hook 后端、由自带检查脚本判定，失败自动回退 Tracepoint
 # 只产出 AnyKernel3 工件，不发布 Release
 name: (小米15系列专用) 6.6.118 GKI内核快速构建
 
@@ -126,10 +127,10 @@ jobs:
       actions: write
       contents: read
     steps:
-      # SukiSU-Nova 需要仓库内的 scripts/ksu_post_setup.sh、ksu_uapi_sync、sukisu_nova_compat、susfs_fixes；
-      # 回移补丁与 FinaSU 证书脚本均按 raw URL 拉取，故仅 SukiSU-Nova 时稀疏拉取 scripts/ 目录
+      # 所有内置 KSU 变体的 SUSFS 步骤共用仓库内的 scripts/susfs_fixes（SukiSU-Nova 另需
+      # ksu_post_setup、ksu_uapi_sync、sukisu_nova_compat）；回移补丁与 FinaSU 证书脚本按 raw URL 拉取
       - name: 检出构建脚本
-        if: inputs.ksu_type == 'sukisu-nova'
+        if: inputs.ksu_type == 'sukisu-nova' || inputs.susfs_enable
         uses: actions/checkout@v7
         with:
           sparse-checkout: |
@@ -439,51 +440,21 @@ jobs:
         run: |
           cd kernel_workspace
           if [[ ${{ github.event.inputs.ksu_type }} != "none" ]]; then
-            if [[ "${{ github.event.inputs.ksu_type }}" == "sukisu-nova" ]]; then
-              # SukiSU-Nova builtin 驱动无条件调用 priority uid filter 接口，改用 susfs4ksu gki-android15-6.6，
-              # 并交给 susfs_fixes 统一适配（守卫归一化等，按版本/内容检测，6.6 不适用的修复自动跳过）
-              echo "正在添加susfs补丁（SukiSU-Nova: susfs4ksu gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}）..."
-              git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu -b gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}
-              KERNEL_ROOT="$(pwd)" SUSFS4KSU="$(pwd)/susfs4ksu" KERNEL_PATCHES="$(pwd)/kernel_patches" \
-                ANDROID_VERSION="${{ env.ANDROID_VERSION }}" KERNEL_VERSION="${{ env.KERNEL_VERSION }}" \
-                KSU_VARIANT=SukiSU-Nova OS_PATCH_LEVEL= LEGACY_SUKISU_NOVA_CONFIG= SUB_LEVEL="${SUB_VERSION%%_*}" \
-                bash "$GITHUB_WORKSPACE/scripts/susfs_fixes/apply.sh"
+            # 与主 6.6 管线（其他机型）同源：统一 susfs4ksu gki-android15-6.6 + susfs_fixes，
+            # 内核侧主补丁和版本适配全部交给该脚本（按版本/内容检测，6.6 不适用的修复自动跳过）
+            if [[ "${{ github.event.inputs.ksu_type }}" == "finasu" ]]; then
+              KSU_VARIANT_NAME=FinaSU
+            elif [[ "${{ github.event.inputs.ksu_type }}" == "bakasu" ]]; then
+              KSU_VARIANT_NAME=BakaSU
             else
-              echo "正在添加susfs补丁（susfs4ksu gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}）..."
-              git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu -b gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}
-              cp ./susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch ./common/
-              cp ./susfs4ksu/kernel_patches/fs/* ./common/fs/
-              cp ./susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
-              cd ./common
-              # 补丁上下文跟随 susfs4ksu 分支上游，可能与钉住的 6.6.118 源码命名不一致；
-              # 按源码实际写法改写补丁的上下文行（只改上下文行、不动新增代码），避免依赖 patch 模糊匹配
-              SUSFS_PATCH_FILE="50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch"
-              if grep -qF 'if (!vma_pages(vma))' fs/proc/task_mmu.c \
-                && ! grep -qF 'if (!vma_data_pages(vma))' fs/proc/task_mmu.c \
-                && grep -qF 'if (!vma_data_pages(vma))' "$SUSFS_PATCH_FILE" \
-                && ! grep -qF 'if (!vma_pages(vma))' "$SUSFS_PATCH_FILE"; then
-                echo "调整 SUSFS 补丁上下文：vma_data_pages -> vma_pages（6.6.118 基线）"
-                sed -i 's/^ \(.*\)if (!vma_data_pages(vma))$/ \1if (!vma_pages(vma))/' "$SUSFS_PATCH_FILE"
-              elif grep -qF 'if (!vma_data_pages(vma))' fs/proc/task_mmu.c \
-                && ! grep -qF 'if (!vma_pages(vma))' fs/proc/task_mmu.c \
-                && grep -qF 'if (!vma_pages(vma))' "$SUSFS_PATCH_FILE" \
-                && ! grep -qF 'if (!vma_data_pages(vma))' "$SUSFS_PATCH_FILE"; then
-                echo "调整 SUSFS 补丁上下文：vma_pages -> vma_data_pages（show_smap 基线变化）"
-                sed -i 's/^ \(.*\)if (!vma_pages(vma))$/ \1if (!vma_data_pages(vma))/' "$SUSFS_PATCH_FILE"
-              fi
-              patch -p1 -F 3 < "$SUSFS_PATCH_FILE" || true
-              # SUS_MAP 检查必须落在 show_smap；模糊匹配落到别处时立即失败，避免到编译阶段才发现
-              if ! awk '/^static int show_smap\(/,/^}/' fs/proc/task_mmu.c | grep -q 'SUSFS_IS_INODE_SUS_MAP'; then
-                echo "::error::SUS_MAP 检查未落入 show_smap（SUSFS 补丁上下文与当前内核源码不匹配）"
-                exit 1
-              fi
-              if awk '/^static void __show_smap\(/,/^}/' fs/proc/task_mmu.c | grep -q 'SUSFS_IS_INODE_SUS_MAP'; then
-                echo "::error::SUS_MAP 检查被错误插入 __show_smap"
-                exit 1
-              fi
-              # oki-6.6 补丁已内置 fs/exec.c preinit 直调点，无需 6.12 专用补充补丁；Inline hook 由「添加 KSU & 其他配置项」按需开启
-              cd ..
+              KSU_VARIANT_NAME=SukiSU-Nova
             fi
+            echo "正在添加susfs补丁（${KSU_VARIANT_NAME}: susfs4ksu gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}）..."
+            git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu -b gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}
+            KERNEL_ROOT="$(pwd)" SUSFS4KSU="$(pwd)/susfs4ksu" KERNEL_PATCHES="$(pwd)/kernel_patches" \
+              ANDROID_VERSION="${{ env.ANDROID_VERSION }}" KERNEL_VERSION="${{ env.KERNEL_VERSION }}" \
+              KSU_VARIANT="$KSU_VARIANT_NAME" OS_PATCH_LEVEL= LEGACY_SUKISU_NOVA_CONFIG= SUB_LEVEL="${SUB_VERSION%%_*}" \
+              bash "$GITHUB_WORKSPACE/scripts/susfs_fixes/apply.sh"
           else
             echo "已选择无内置KernelSU模式，跳过susfs配置..."
           fi
@@ -515,17 +486,18 @@ jobs:
           if [[ "${{ github.event.inputs.susfs_enable }}" == "false" ]]; then
             echo "CONFIG_KSU_SUSFS=n" >> ./common/arch/arm64/configs/gki_defconfig
           fi
-          # FinaSU + SUSFS：优先启用 SUSFS Inline hook 后端（oki-6.6 补丁已内置 fs/exec.c preinit 直调点）；
-          # 编译失败时在编译步骤自动回退到默认 Tracepoint
+          # FinaSU + SUSFS：Inline 后端由 FinaSU 自带的直调点检查脚本判定（与主 6.6 管线一致）；
+          # 检查不通过走默认 Tracepoint，编译仍失败时由编译步骤删配置回退重编
           FINASU_INLINE=0
           if [[ "${{ github.event.inputs.ksu_type }}" == "finasu" && "${{ github.event.inputs.susfs_enable }}" == "true" ]]; then
+            chmod +x ./KernelSU/kernel/tools/check_susfs_inline.sh 2>/dev/null || true
             if grep -q '^config KSU_HOOK_SUSFS_INLINE' ./KernelSU/kernel/Kconfig 2>/dev/null \
-              && grep -qF 'ksu_setup_preinit_file(&filename' ./common/fs/exec.c; then
+              && bash ./KernelSU/kernel/tools/check_susfs_inline.sh common >/dev/null 2>&1; then
               echo "CONFIG_KSU_HOOK_SUSFS_INLINE=y" >> ./common/arch/arm64/configs/gki_defconfig
               FINASU_INLINE=1
               echo "FinaSU: 已启用 SUSFS Inline hook 后端"
             else
-              echo "::warning title=SUSFS Inline 不可用::FinaSU 未声明 Inline hook 或 fs/exec.c 缺 preinit 调用点，使用默认 Tracepoint 后端"
+              echo "::warning title=SUSFS Inline 回退::susfs4ksu 直调点校验未通过，使用默认 Tracepoint 后端"
             fi
           fi
           # KPM 为 SukiSU-Nova 内核内置功能（CONFIG_KPM），其它变体无此配置项
