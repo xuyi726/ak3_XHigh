@@ -7,7 +7,7 @@
 # 相对 6.12.69 模板裁剪：lz4/zstd、lz4kd、ADIOS、Re-Kernel、Droidspaces（依赖树外代码或 6.12 专用补丁，
 #   纯净 AOSP 6.6 源码不含这些代码，强行开启只会无效或编译失败）；FinaSU 优先走 Inline hook 后端、失败自动回退 Tracepoint（oki-6.6 补丁已内置 preinit 直调点）
 # 只产出 AnyKernel3 工件，不发布 Release
-name: (小米15专用) 6.6.118 GKI内核快速构建
+name: (小米15系列专用) 6.6.118 GKI内核快速构建
 
 env:
   TZ: Asia/Shanghai
