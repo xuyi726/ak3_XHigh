@@ -58,10 +58,15 @@ on:
         type: boolean
         default: false
       summary_profile:
-        description: "构建总结档案：kernel=通用内核工作流；fastbuild=6.12.69 快速构建；mi15=小米15专用 6.6.118（选项集各异）"
+        description: "构建总结档案：kernel=通用内核工作流；fastbuild=6.12.69 快速构建；mi15=小米系专用 6.6.118（选项集各异）"
         required: false
         type: string
         default: "kernel"
+      xiaomi_backport:
+        description: "小米系回移补丁开关（仅用于构建总结展示）"
+        required: false
+        type: boolean
+        default: true
       use_lz4:
         required: false
         type: boolean
@@ -437,6 +442,11 @@ jobs:
           [ -n "$SUFFIX_ROW" ] || SUFFIX_ROW="默认"
           FB_TIME_ROW="${{ inputs.build_time }}"
           [ -n "$FB_TIME_ROW" ] || FB_TIME_ROW="内置默认（Mon Jul 20 18:34:35 UTC 2026）"
+          if [ "${{ inputs.xiaomi_backport }}" = "true" ]; then
+            XM_ROW="✅ 启用（erofs-fsoffset + f2fs-fault_report）"
+          else
+            XM_ROW="➖ 关闭"
+          fi
           if { [ "$PROFILE" = "fastbuild" ] || [ "$PROFILE" = "mi15" ]; } && [ "$VARIANT" != "SukiSU-Nova" ]; then
             case "$KPM_ROW" in
               *关闭*) : ;;
@@ -469,7 +479,7 @@ jobs:
               echo "| 内核后缀 | $SUFFIX_ROW |"
               echo "| 自定义构建时间 | $FB_TIME_ROW |"
             elif [ "$PROFILE" = "mi15" ]; then
-              echo "| 小米15开机回移补丁 | ✅ erofs-fsoffset + f2fs-fault_report |"
+              echo "| 小米系回移补丁 | $XM_ROW |"
               echo "| SUSFS | $SUS_ROW |"
               echo "| KPM | $KPM_ROW |"
               echo "| BBR 算法 | $BBR_ROW |"

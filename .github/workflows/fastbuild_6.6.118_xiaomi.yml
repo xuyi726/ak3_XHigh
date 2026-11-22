@@ -2,7 +2,8 @@
 # 仅编译 android15-6.6 GKI 6.6.118，源码固定到 AOSP 提交 7218e25a44f414ea0275b309319cc11a48290124
 # 开机关键：回移两个上游（小米作者）补丁——
 #   erofs fsoffset (c36ec00d7f67) + f2fs fault_report (f6b245660358)，见 xiaomi15_patch/
-#   纯 GKI 6.6.118 缺这两项会在小米15上 bootloop（system 分区偏移错→字体截断→system_server 崩溃）
+#   纯 GKI 6.6.118 缺这两项会在小米系上 bootloop（system 分区偏移错→字体截断→system_server 崩溃）；
+#   由「启用 小米系回移补丁」开关控制：小米系必须开启，红米请关闭
 # 工具链：LLVM/Clang 18 (r510928)，6.6 无 Rust（gki_defconfig 用 C binder）
 # 相对 6.12.69 模板裁剪：lz4/zstd、lz4kd、ADIOS、Re-Kernel、Droidspaces（依赖树外代码或 6.12 专用补丁，
 #   纯净 AOSP 6.6 源码不含这些代码，强行开启只会无效或编译失败）；SUSFS 统一用 susfs4ksu（与主 6.6 管线同源），
@@ -90,6 +91,11 @@ on:
         required: false
         type: string
         default: ''
+      xiaomi_backport:
+        description: '启用 小米系回移补丁(红米请勿启用 小米必须启用)'
+        required: true
+        type: boolean
+        default: 'true'
 
 jobs:
   get-ksu-manager:
@@ -105,9 +111,10 @@ jobs:
     with:
       kernelsu_variant: ${{ inputs.ksu_type == 'finasu' && 'FinaSU' || inputs.ksu_type == 'bakasu' && 'BakaSU' || 'SukiSU-Nova' }}
       build_channel: ${{ inputs.build_channel }}
-      # 本工作流选项集与通用内核/6.12 快速构建都不同，构建总结按 mi15 档案渲染（只列真实选项 + 开机回移补丁行）；
+      # 本工作流选项集与通用内核/6.12 快速构建都不同，构建总结按 mi15 档案渲染（只列真实选项 + 回移补丁开关行）；
       # 已裁剪 lz4/lz4kd/adios/rekernel/droidspaces，对应 use_* 不传，沿用 get-manager 默认关闭
       summary_profile: mi15
+      xiaomi_backport: ${{ inputs.xiaomi_backport }}
       cancel_susfs: ${{ !inputs.susfs_enable }}
       use_bbg: ${{ inputs.baseband_guard }}
       use_net_enhance: ${{ inputs.better_net }}
@@ -191,10 +198,11 @@ jobs:
             sed -i '$i res=$(echo "$res" | sed '\''s/-dirty//g'\'')' "$f"
           done
 
-      - name: 应用小米15开机兼容补丁(erofs fsoffset + f2fs fault_report)
+      - name: 应用小米系开机兼容补丁(erofs fsoffset + f2fs fault_report)
+        if: inputs.xiaomi_backport
         run: |
           cd kernel_workspace/common
-          # 这两项是小米15系列开机的关键回移补丁，必须成功应用，失败立即中断（不做 || true 容忍）
+          # 这两项是小米系开机的关键回移补丁，必须成功应用，失败立即中断（不做 || true 容忍）
           echo "正在回移 erofs fsoffset（上游 c36ec00d7f67，小米作者）..."
           wget -q "https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/xiaomi15_patch/0001-erofs-fsoffset-6.6.patch" -O /tmp/0001-erofs-fsoffset-6.6.patch
           patch -p1 -F 3 < /tmp/0001-erofs-fsoffset-6.6.patch
@@ -210,7 +218,7 @@ jobs:
             && grep -q 'TRACE_EVENT(f2fs_fault_report,' include/trace/events/f2fs.h \
             && grep -q 'EXPORT_TRACEPOINT_SYMBOL_GPL(f2fs_fault_report);' fs/f2fs/super.c \
             || { echo "::error::f2fs fault_report 回移校验失败"; exit 1; }
-          echo "小米15开机兼容补丁应用并校验完成。"
+          echo "小米系开机兼容补丁应用并校验完成。"
 
       - name: 配置ccache目录
         run: |
@@ -422,7 +430,12 @@ jobs:
           else
             AK3_NAME="${KSU_TYPENAME}_kernel-${CONFIG}"
           fi
-          AK3_NAME="${AK3_NAME}(小米系)"
+          # 开关关闭=红米线（纯 GKI 无回移补丁），开启=小米系
+          if [[ "${{ inputs.xiaomi_backport }}" == "true" ]]; then
+            AK3_NAME="${AK3_NAME}(小米系)"
+          else
+            AK3_NAME="${AK3_NAME}(红米系)"
+          fi
           echo "KSU_TYPENAME=$KSU_TYPENAME" >> $GITHUB_ENV
           echo "AK3_NAME=$AK3_NAME" >> $GITHUB_ENV
           echo "AnyKernel3 命名: $AK3_NAME"
@@ -923,7 +936,11 @@ jobs:
           echo "IPset: ${{ github.event.inputs.better_net }}" >> ./ak3.log
           echo "BBR&Brutal: ${{ github.event.inputs.bbr_enable }}" >> ./ak3.log
           echo "BBG: ${{ github.event.inputs.baseband_guard }}" >> ./ak3.log
-          echo "Mi15 backports: erofs-fsoffset + f2fs-fault_report" >> ./ak3.log
+          if [[ "${{ inputs.xiaomi_backport }}" == "true" ]]; then
+            echo "Xiaomi backports: erofs-fsoffset + f2fs-fault_report" >> ./ak3.log
+          else
+            echo "Xiaomi backports: disabled" >> ./ak3.log
+          fi
           zip -z "../$AK3_ZIP" < ./ak3.log
 
       - name: 上传 Ccache 调试日志
