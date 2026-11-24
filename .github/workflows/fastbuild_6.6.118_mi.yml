@@ -9,7 +9,7 @@
 #   纯净 AOSP 6.6 源码不含这些代码，强行开启只会无效或编译失败）；SUSFS 统一用 susfs4ksu（与主 6.6 管线同源），
 #   FinaSU 优先走 Inline hook 后端、由自带检查脚本判定，失败自动回退 Tracepoint
 # 只产出 AnyKernel3 工件，不发布 Release
-name: (小米系6.6.118专用)GKI内核快速构建
+name: (米系6.6.118通用)GKI内核快速构建
 
 env:
   TZ: Asia/Shanghai
