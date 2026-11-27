@@ -146,12 +146,12 @@ if [ "$VARIANT" == "FinaSU" ] && [ "${PIN_MODE:-pin}" != "head" ]; then
   exit 0
 fi
 
-# ---------- 最新通道（SukiSU-Nova）：上游 CI 已迁至 Forgejo ----------
-# 具体逻辑在 .github/scripts/sukisu-nova-manager.sh。成功时脚本写入
-# GITHUB_ENV/OUTPUT 并退出 0。
+# ---------- SukiSU-Nova：正式通道取稳定 Release、最新通道取 manager-ci ----------
+# 具体逻辑与端点见 .github/scripts/sukisu-nova-manager.sh。成功时脚本写入
+# GITHUB_ENV/OUTPUT 并退出 0；失败则回退下方的 GitHub Actions 通道查询。
 if [ "$VARIANT" = "SukiSU-Nova" ]; then
-  echo "SukiSU-Nova：从 Forgejo manager-ci Release / cnb.cool 镜像获取最新 CI 管理器..."
-  if bash "$GITHUB_WORKSPACE/.github/scripts/sukisu-nova-manager.sh"; then
+  echo "SukiSU-Nova：从上游 Release 源获取管理器（通道：${BUILD_CHANNEL_INPUT:-release}）..."
+  if bash "$GITHUB_WORKSPACE/.github/scripts/sukisu-nova-manager.sh" "${BUILD_CHANNEL_INPUT:-release}" KernelSU; then
     exit 0
   fi
   echo "::warning title=SukiSU-Nova 最新通道回退::未能从 Forgejo/cnb.cool 获取可用管理器，回退 GitHub Actions 通道查询"

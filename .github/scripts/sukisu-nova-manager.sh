@@ -1,112 +1,103 @@
 #!/usr/bin/env bash
-# SukiSU-Nova 最新通道：从 Forgejo manager-ci Release / cnb.cool 镜像获取上游 CI 管理器。
-# 由 get-manager.yml 的「添加 KernelSU」步骤调用。独立成文件是因为内联进 run 会超过
-# GitHub 单脚本 21000 字符的模板上限，整个 workflow 会被判无效。
+# SukiSU-Nova 管理器获取：正式通道取上游稳定版 Release，最新通道取 manager-ci。
+# 由 get-manager.yml 的「添加 KernelSU」经 .github/scripts/get-ksu-manager.sh 调用。
+# 独立成文件是因为内联进 run 会超过 GitHub 单脚本 21000 字符的模板上限。
 # 成功：写入 GITHUB_ENV / GITHUB_OUTPUT 并退出 0；失败：退出 1，由调用方回退
-# GitHub Actions 通道查询。上游 GitHub 镜像的 build-manager.yml 已删除，
-# manager.yml 在 GitHub 上从未运行，因此不再产出 Actions artifact。
-# Release 资产为空时 APK 在 cnb.cool 镜像页分发；Release 的 target_commitish
-# 即构建提交，这里按 APK 文件名实测 versionCode，并以该提交的 Forgejo 提交计数
-# （30000 + 提交数 + 996）做版本自检。
+# GitHub Actions 通道查询。
+#
+# 用法：sukisu-nova-manager.sh [build_channel] [KernelSU 目录]
+set -euo pipefail
 
-NOVA_API="https://git.zako.shirkneko.top:20004/api/v1/repos/shirkneko/SukiSU"
+CHANNEL="${1:-release}"
+KSU_DIR="${2:-KernelSU}"
+# 管理器 APK 已迁到 cnb.cool/shirkneko/sukisu-result（zako 上的 Release 不再带 APK 资产）；
+# 该端点需 Accept: application/json 才返回 JSON，字段与 Gitea 兼容
+API="https://cnb.cool/shirkneko/sukisu-result/-/releases"
+ACCEPT="Accept: application/json"
 
-NOVA_REL=""
-for ATTEMPT in 1 2 3; do
-  NOVA_REL=$(curl -s --fail --max-time 30 "$NOVA_API/releases/tags/manager-ci") \
-    && [ -n "$NOVA_REL" ] && break
-  echo "获取 manager-ci Release 信息失败，重试 ($ATTEMPT/3)..."
-  NOVA_REL=""
-  sleep 5
-done
+case "$CHANNEL" in
+  最新*|latest*|HEAD*) ROLLING=true ;;
+  *) ROLLING=false ;;
+esac
 
-NOVA_PIN=""
-NOVA_ASSET_URL=""
-if [ -n "$NOVA_REL" ]; then
-  NOVA_REL_NAME=$(printf '%s' "$NOVA_REL" | jq -r '.name // empty' || true)
-  NOVA_PIN=$(printf '%s' "$NOVA_REL" | jq -r '.target_commitish // empty' || true)
-  echo "manager-ci Release: ${NOVA_REL_NAME:-未知}，构建提交 ${NOVA_PIN:0:8}"
-  # target_commitish 可能是分支名，统一解析为提交 SHA
-  if [ -n "$NOVA_PIN" ] && ! printf '%s' "$NOVA_PIN" | grep -qE '^[0-9a-f]{40}$'; then
-    NOVA_PIN=$(curl -s --fail --max-time 30 "$NOVA_API/branches/$NOVA_PIN" | jq -r '.commit.id // empty' || true)
+RELEASE=""
+if [ "$ROLLING" = false ]; then
+  RELEASE=$(curl -fsSL --retry 3 --max-time 30 -H "$ACCEPT" "$API" | jq -c '
+    [ .[]
+      | select((.draft | not) and (.prerelease | not))
+      | select(.tag_name | test("(?i)^(manager-ci|manager_ci|nightly|latest|ci)$") | not)
+      | select(any(.assets[]?;
+          (.name | test("release\\.apk$"; "i")) and
+          (.name | test("(?i)debug|spoofed") | not))) ]
+    | .[0] // empty
+  ')
+  if [ -z "$RELEASE" ]; then
+    echo "::notice::SukiSU-Nova 没有正式版 APK，改用 manager-ci"
+    ROLLING=true
   fi
-  if [ -n "$NOVA_PIN" ]; then
-    NOVA_PIN_SHA=$(curl -s --fail --max-time 30 "$NOVA_API/git/commits/$NOVA_PIN" | jq -r '.sha // empty' || true)
-    if [ "$NOVA_PIN_SHA" != "$NOVA_PIN" ]; then
-      echo "::warning::manager-ci 目标提交 $NOVA_PIN 在 Forgejo 上无法解析，跳过锁定"
-      NOVA_PIN=""
-    fi
-  fi
-  # 优先 Release 自带资产（若上游恢复上传），否则翻 cnb.cool 镜像页发现 APK
-  NOVA_ASSET=""
-  for SEL in arm64-v8a ""; do
-    if [ -n "$SEL" ]; then
-      NOVA_ASSET=$(printf '%s' "$NOVA_REL" | jq -r '.assets[]? | "\(.name)\t\(.browser_download_url)"' | grep -i '\.apk' | grep "$SEL" | head -n1 || true)
-    else
-      NOVA_ASSET=$(printf '%s' "$NOVA_REL" | jq -r '.assets[]? | "\(.name)\t\(.browser_download_url)"' | grep -i '\.apk' | head -n1 || true)
-    fi
-    if [ -n "$NOVA_ASSET" ]; then
-      break
-    fi
-  done
-  if [ -n "$NOVA_ASSET" ]; then
-    NOVA_ASSET_URL=$(printf '%s' "$NOVA_ASSET" | cut -f2)
+fi
+
+if [ "$ROLLING" = true ]; then
+  RELEASE=$(curl -fsSL --retry 3 --max-time 30 -H "$ACCEPT" "$API/tags/manager-ci")
+fi
+
+TAG=$(printf '%s' "$RELEASE" | jq -r '.tag_name')
+ASSETS=$(printf '%s' "$RELEASE" | jq -r '
+  [ .assets[]?
+    | select(.name | test("release\\.apk$"; "i"))
+    | select(.name | test("(?i)debug|spoofed") | not) ]
+  | sort_by(if (.name | test("(?i)universal")) then 0
+            elif (.name | test("(?i)arm64-v8a")) then 1 else 2 end)
+  | .[] | [.name, .browser_download_url] | @tsv
+')
+if [ -z "$ASSETS" ]; then
+  echo "::error::SukiSU-Nova $TAG 中没有可用的管理器 APK"
+  exit 1
+fi
+IFS=$'\t' read -r APK_NAME _ <<< "$(printf '%s\n' "$ASSETS" | head -n 1)"
+APK_NAME="${APK_NAME%$'\r'}"
+if [[ "$APK_NAME" =~ _([0-9]+)(-(arm64-v8a|armeabi-v7a|armv7|riscv64|x86_64|x86|universal))?-release\.apk$ ]]; then
+  VERSION="${BASH_REMATCH[1]}"
+else
+  echo "::error::无法从 SukiSU-Nova APK 文件名解析版本: $APK_NAME"
+  exit 1
+fi
+
+COMMIT=""
+if [ "$ROLLING" = false ]; then
+  COMMIT=$(git -C "$KSU_DIR" rev-parse --verify "${TAG}^{commit}")
+else
+  # The rolling release replaces APKs without moving its tag, so only the
+  # current main history count can confirm that the APK was built from HEAD.
+  COMMIT=$(git -C "$KSU_DIR" rev-parse origin/main)
+fi
+if [ -z "$COMMIT" ]; then
+  echo "::error::无法在 SukiSU-Nova main 中找到与管理器 $VERSION 对齐的提交"
+  exit 1
+fi
+COUNT=$(git -C "$KSU_DIR" rev-list --count "$COMMIT")
+ACTUAL_VERSION=$((30000 + COUNT + 996))
+if [ "$VERSION" -ne "$ACTUAL_VERSION" ]; then
+  if [ "$ROLLING" = false ]; then
+    echo "::error::SukiSU-Nova $TAG 的 APK 版本与标签提交不一致"
   else
-    CNB_PAGE=$(curl -sL --fail --max-time 40 "https://cnb.cool/shirkneko/sukisu-result/-/releases/tag/manager-ci" || true)
-    NOVA_PATH=""
-    for SEL in arm64-v8a ""; do
-      if [ -n "$SEL" ]; then
-        NOVA_PATH=$(printf '%s' "$CNB_PAGE" | grep -oE 'releases/download/manager-ci/[A-Za-z0-9._-]+\.apk' | sort -u | grep "$SEL" | head -n1 || true)
-      else
-        NOVA_PATH=$(printf '%s' "$CNB_PAGE" | grep -oE 'releases/download/manager-ci/[A-Za-z0-9._-]+\.apk' | sort -u | head -n1 || true)
-      fi
-      if [ -n "$NOVA_PATH" ]; then
-        break
-      fi
-    done
-    if [ -n "$NOVA_PATH" ]; then
-      NOVA_ASSET_URL="https://cnb.cool/shirkneko/sukisu-result/-/$NOVA_PATH"
-    fi
+    echo "::error::SukiSU-Nova manager-ci 版本 $VERSION 与 main HEAD 版本 $ACTUAL_VERSION 不一致，请等待上游 CI 完成"
   fi
+  exit 1
 fi
 
-NOVA_APK=""
-if [ -n "$NOVA_ASSET_URL" ]; then
-  mkdir -p manager-artifacts
-  NOVA_APK="manager-artifacts/$(basename "$NOVA_ASSET_URL")"
-  if ! curl -sL --fail --retry 3 --max-time 300 -o "$NOVA_APK" "$NOVA_ASSET_URL"; then
-    echo "下载 manager-ci 管理器失败: $NOVA_ASSET_URL"
-    NOVA_APK=""
+mkdir -p manager-artifacts
+while IFS=$'\t' read -r NAME URL; do
+  NAME="${NAME%$'\r'}"
+  URL="${URL%$'\r'}"
+  curl -fsSL --retry 3 --max-time 300 -o "manager-artifacts/$(basename "$NAME")" "$URL"
+done <<< "$ASSETS"
+echo "SukiSU-Nova $TAG: 管理器 $VERSION，内核版本来源提交 $COMMIT"
+echo "MANAGER_VERSION=$VERSION" >> "$GITHUB_ENV"
+{
+  echo "managerVer=$VERSION"
+  echo "ksuCommit=$COMMIT"
+  if [ "$ROLLING" = false ]; then
+    echo "channelTag=$TAG"
   fi
-fi
-
-NOVA_VERSION=""
-if [ -n "$NOVA_APK" ]; then
-  CLEAN_NAME=$(basename "$NOVA_APK" | sed -E 's/-(arm64-v8a|armeabi-v7a|armv7|riscv64|x86_64|x86|universal)-release\.apk$/.apk/')
-  NOVA_VERSION=$(echo "$CLEAN_NAME" | grep -oE '_[0-9]+' | tail -n 1 | tr -d '_' || true)
-  if ! [[ "$NOVA_VERSION" =~ ^[0-9]+$ ]]; then
-    echo "无法从 manager-ci APK 文件名解析版本 ($(basename "$NOVA_APK"))"
-    NOVA_VERSION=""
-  fi
-fi
-
-if [ -n "$NOVA_VERSION" ] && [ -n "$NOVA_PIN" ]; then
-  # 版本自检：Forgejo 提交计数与 APK 实测 versionCode 应一致
-  NOVA_PIN_COUNT=$(curl -s -D - -o /dev/null --max-time 30 "$NOVA_API/commits?sha=$NOVA_PIN&limit=1" | tr -d '\r' | sed -n 's/^[Xx]-[Tt]otal-[Cc]ount:[[:space:]]*\([0-9]*\).*/\1/p')
-  if [ -n "$NOVA_PIN_COUNT" ]; then
-    NOVA_PIN_VERSION=$((30000 + NOVA_PIN_COUNT + 996))
-    echo "manager-ci 构建提交 ${NOVA_PIN:0:8} 对应 KSU 版本: $NOVA_PIN_VERSION，APK 实测版本: $NOVA_VERSION"
-    if [ "$NOVA_VERSION" != "$NOVA_PIN_VERSION" ]; then
-      echo "::warning::Manager 实测版本 $NOVA_VERSION 与 manager-ci 构建提交对应的 KSU 版本 $NOVA_PIN_VERSION 不一致（滚动 Release 可能刚更新，重跑即可）"
-    fi
-  else
-    echo "::warning::无法通过 Forgejo API 计算构建提交 $NOVA_PIN 对应的 KSU 版本（APK 实测版本 $NOVA_VERSION）"
-  fi
-  echo "MANAGER_VERSION=$NOVA_VERSION" >> "$GITHUB_ENV"
-  echo "managerVer=$NOVA_VERSION" >> "$GITHUB_OUTPUT"
-  echo "ksuCommit=$NOVA_PIN" >> "$GITHUB_OUTPUT"
-  echo "SukiSU-Nova 最新通道：管理器 $NOVA_VERSION，内核锁定 ${NOVA_PIN:0:8}"
-  exit 0
-fi
-
-exit 1
+} >> "$GITHUB_OUTPUT"
