@@ -151,14 +151,16 @@ jobs:
       actions: write
       contents: read
     steps:
-      # SukiSU-Nova 需要仓库内的 scripts/ksu_post_setup.sh、ksu_uapi_sync、sukisu_nova_compat；
-      # 本工作流其余步骤都不依赖本仓库检出，故仅 SukiSU-Nova 时稀疏拉取 scripts/ 目录
+      # SukiSU-Nova 需要仓库内的 scripts/ksu_post_setup.sh、ksu_uapi_sync、sukisu_nova_compat，
+      # 以及 .github/scripts/ksu-version.sh（产物命名与内核侧版本求值都用它）；
+      # 本工作流其余步骤都不依赖本仓库检出，故仅 SukiSU-Nova 时稀疏拉取这两个目录
       - name: 检出构建脚本
         if: inputs.ksu_type == 'sukisu-nova'
         uses: actions/checkout@v7
         with:
           sparse-checkout: |
             scripts
+            .github/scripts
 
       - name: 安装环境依赖+初始化源码仓库及llvm-clang19工具链
         run: |
@@ -392,6 +394,10 @@ jobs:
             echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
           elif [[ ${{ github.event.inputs.ksu_type }} == "sukisu-nova" ]]; then
             echo "正在配置SukiSU-Nova..."
+            # 版本号由 .github/scripts/ksu-version.sh 按上游公式求值；本工作流只稀疏检出
+            # scripts/ 与 .github/scripts/，脚本缺失时会静默降级成「未知」产物名，这里先卡住
+            KSU_VERSION_SCRIPT="$GITHUB_WORKSPACE/.github/scripts/ksu-version.sh"
+            [ -f "$KSU_VERSION_SCRIPT" ] || { echo "::error::缺少 $KSU_VERSION_SCRIPT（检出时未包含 .github/scripts）"; exit 1; }
             # 开启 SUSFS 时用 builtin 分支（内建 SUSFS 支持与 Inline hook），关闭时用 main
             if [[ "${{ github.event.inputs.susfs_enable }}" == "true" ]]; then
               SUKISU_NOVA_BRANCH=builtin
@@ -430,7 +436,7 @@ jobs:
               grep -qE "^REPO_BRANCH[[:space:]]*[:?+]?=[[:space:]]*$KSU_PIN[[:space:]]*\$" "$KSU_VERSION_SOURCE" \
                 || { echo "::error::未能在 $KSU_VERSION_SOURCE 中对齐 REPO_BRANCH（上游结构可能已变化），无法对齐管理器版本"; exit 1; }
               # 版本公式随上游发布调整，按源码求值（main 在 kernel/Kbuild，builtin 在 kernel/Makefile）
-              KSU_PIN_VERSION=$(bash "$GITHUB_WORKSPACE/.github/scripts/ksu-version.sh" . "$KSU_PIN" "$KSU_VERSION_SOURCE" 2>/dev/null || echo "未知")
+              KSU_PIN_VERSION=$(bash "$KSU_VERSION_SCRIPT" . "$KSU_PIN" "$KSU_VERSION_SOURCE" 2>/dev/null || echo "未知")
               echo "SukiSU-Nova 内核侧版本来源已对齐管理器构建提交 $KSU_PIN (KSU 版本 $KSU_PIN_VERSION)"
             fi
             # 版本号与内核实际公式保持一致：取管理器构建提交，按该提交的
@@ -445,7 +451,7 @@ jobs:
             else
               KSU_VERSION_FILE="kernel/Kbuild"
             fi
-            KSU_VERSION=$(bash "$GITHUB_WORKSPACE/.github/scripts/ksu-version.sh" . "$KSU_VERSION_REF" "$KSU_VERSION_FILE" 2>/dev/null || echo "未知")
+            KSU_VERSION=$(bash "$KSU_VERSION_SCRIPT" . "$KSU_VERSION_REF" "$KSU_VERSION_FILE" 2>/dev/null || echo "未知")
             echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
             cd ..
             # 内核完整版本的 @<branch> 固定为品牌名（CI 检出非 main 分支时管理器显示 @xuyi）
