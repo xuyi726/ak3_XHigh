@@ -13,9 +13,9 @@ set -e
 VARIANT="${KSU_VARIANT:-}"
 
 case "$VARIANT" in
-  "SukiSU-Nova") REPO="SukiSU-Nova/SukiSU-Nova"; KSUM="manager"; EXPECTED_BRANCH="main" ;;
-  "BakaSU") REPO="Baka-SU/BakaSU";           KSUM="manager"; EXPECTED_BRANCH="main" ;;
-  "FinaSU") REPO="LyraVoid/FinaSU";          KSUM="manager"; EXPECTED_BRANCH="master" ;;
+  "SukiSU-Nova") REPO="SukiSU-Nova/SukiSU-Nova"; EXPECTED_BRANCH="main" ;;
+  "BakaSU") REPO="Baka-SU/BakaSU";           EXPECTED_BRANCH="main" ;;
+  "FinaSU") REPO="LyraVoid/FinaSU";          EXPECTED_BRANCH="master" ;;
   *) echo "::error::未知变体: $VARIANT"; exit 1 ;;
 esac
 
@@ -146,18 +146,11 @@ if [ "$VARIANT" == "FinaSU" ] && [ "${PIN_MODE:-pin}" != "head" ]; then
   exit 0
 fi
 
-# ---------- SukiSU-Nova：正式通道取稳定 Release、最新通道取 manager-ci ----------
-# 具体逻辑与端点见 .github/scripts/sukisu-nova-manager.sh。成功时脚本写入
-# GITHUB_ENV/OUTPUT 并退出 0；失败则回退下方的 GitHub Actions 通道查询。
-if [ "$VARIANT" = "SukiSU-Nova" ]; then
-  echo "SukiSU-Nova：从上游 Release 源获取管理器（通道：${BUILD_CHANNEL_INPUT:-release}）..."
-  if bash "$GITHUB_WORKSPACE/.github/scripts/sukisu-nova-manager.sh" "${BUILD_CHANNEL_INPUT:-release}" KernelSU; then
-    exit 0
-  fi
-  echo "::warning title=SukiSU-Nova 最新通道回退::未能从 Forgejo/cnb.cool 获取可用管理器，回退 GitHub Actions 通道查询"
-fi
-
-# ---------- 最新通道：官方 CI 构建的管理器（BakaSU / FinaSU；SukiSU-Nova 走上方 Forgejo 路径） ----------
+# ---------- 最新通道：官方 CI 构建的管理器（SukiSU-Nova / BakaSU / FinaSU） ----------
+# SukiSU-Nova 没有可匿名访问的滚动发布源：上游滚动管理器只发布在 cnb.cool
+# （sukisu-nova/Release，下载需登录）和 Forgejo（manager-ci Release 不含资产），
+# GitHub 上只有正式版 Release 与 build-manager.yml 的 Actions 产物，
+# 因此最新通道直接取官方 CI 产出的 Manager 包，并按该构建提交锁定内核。
 get_manager_artifacts() {
   local artifacts="$1"
   if [ "$VARIANT" == "FinaSU" ]; then
@@ -169,8 +162,10 @@ get_manager_artifacts() {
     printf '%s' "$artifacts" | jq -r \
       '.artifacts[] | select(.name == "Manager-release" or .name == "Spoofed-Manager-release") | "\(.name)\t\(.archive_download_url)"'
   else
-    printf '%s' "$artifacts" | jq -r --arg needle "$KSUM" \
-      '.artifacts[] | select((.name | ascii_downcase) | contains($needle)) | "\(.name)\t\(.archive_download_url)"'
+    # SukiSU-Nova 的正式分发产物名固定为 Manager；Manager-gradle / Manager-mappings
+    # 是未重签的中间产物，Manager-spoofed-* 的包名被改写，都不能当管理器分发。
+    printf '%s' "$artifacts" | jq -r \
+      '.artifacts[] | select(.name == "Manager") | "\(.name)\t\(.archive_download_url)"'
   fi
 }
 
@@ -248,10 +243,15 @@ for DAYS in 0 7 30 90 365; do
       # 正式通道：只认官方默认分支上传的构建（push 与 workflow_dispatch 均可，
       # 手动触发常用于正式上传前测试），跳过 PR / 其他分支构建
       #（SukiSU-Nova/BakaSU 为 main，FinaSU 为 master）
-      # 最新通道：接受任意分支的构建（跳过 PR 构建），再按版本与 HEAD 匹配排序
+      # 最新通道：接受任意分支的构建（跳过 PR 构建），再按版本与 HEAD 匹配排序；
+      # SukiSU-Nova 例外：只看官方 main 分支，否则可能锁定到翻译等分支的提交
       if [ "${PIN_MODE:-pin}" = "head" ]; then
         if [ "$EVENT" != "push" ] && [ "$EVENT" != "workflow_dispatch" ]; then
           echo "跳过构建 $BUILD_ID ($CAND_BRANCH/$EVENT): 非 push/手动触发构建"
+          continue
+        fi
+        if [ "$VARIANT" = "SukiSU-Nova" ] && [ "$CAND_BRANCH" != "$EXPECTED_BRANCH" ]; then
+          echo "跳过构建 $BUILD_ID ($CAND_BRANCH/$EVENT): 非官方 $EXPECTED_BRANCH 分支构建"
           continue
         fi
       elif [ "$CAND_BRANCH" != "$EXPECTED_BRANCH" ] || { [ "$EVENT" != "push" ] && [ "$EVENT" != "workflow_dispatch" ]; }; then
@@ -329,7 +329,7 @@ while IFS=$'\t' read -r PRIO CREATED BUILD_ID CAND_SHA CAND_BRANCH; do
     "https://api.github.com/repos/$REPO/actions/runs/$BUILD_ID/artifacts")
   CANDIDATE_LIST=$(get_manager_artifacts "$ARTIFACTS")
   if [ -z "$CANDIDATE_LIST" ]; then
-    echo "跳过构建 $BUILD_ID ($CAND_BRANCH, $CREATED): 未找到包含 '$KSUM' 的产物"
+    echo "跳过构建 $BUILD_ID ($CAND_BRANCH, $CREATED): 未找到可用的管理器产物"
     continue
   fi
 
@@ -422,10 +422,15 @@ fi
 
 if [ "${PIN_MODE:-pin}" = "head" ] && [ -n "$HEAD_SHA" ] && [ "$LATEST_PICK_BUILD" = 0 ]; then
   if [ -n "$HEAD_VERSION" ] && [ "$MANAGER_VERSION" != "$HEAD_VERSION" ]; then
-    echo "::warning::最新通道：未找到与 $EXPECTED_BRANCH HEAD 版本 $HEAD_VERSION 一致的管理器，回退到 $MANAGER_VERSION"
+    # 上游 CI 产物跟不上 HEAD 时，继续锁 HEAD 会让内核与管理器版本错位；
+    # 改为锁定管理器构建提交，并明确告知落后 HEAD。
+    echo "::warning title=SukiSU-Nova 最新通道::最新 CI 管理器 $MANAGER_VERSION 落后于 $EXPECTED_BRANCH HEAD 版本 $HEAD_VERSION，本次改为锁定管理器构建提交 ${MANAGER_HEAD_SHA:0:8}"
+    echo "最新通道：内核锁定管理器构建提交 ${MANAGER_HEAD_SHA:0:8}，管理器版本 $MANAGER_VERSION"
+    echo "ksuCommit=$MANAGER_HEAD_SHA" >> $GITHUB_OUTPUT
+  else
+    echo "最新通道：内核锁定 $EXPECTED_BRANCH HEAD ${HEAD_SHA:0:8}，管理器版本 $MANAGER_VERSION"
+    echo "ksuCommit=$HEAD_SHA" >> $GITHUB_OUTPUT
   fi
-  echo "最新通道：内核锁定 $EXPECTED_BRANCH HEAD ${HEAD_SHA:0:8}，管理器版本 $MANAGER_VERSION"
-  echo "ksuCommit=$HEAD_SHA" >> $GITHUB_OUTPUT
 else
   if [ "${PIN_MODE:-pin}" = "head" ] && [ "$LATEST_PICK_BUILD" = 1 ]; then
     echo "最新通道：内核锁定 build-manager 构建提交 ${MANAGER_HEAD_SHA:0:8}，管理器版本 $MANAGER_VERSION"
