@@ -363,13 +363,14 @@ jobs:
             else
               SUKISU_NOVA_BRANCH=main
             fi
-            curl -LSs "https://raw.githubusercontent.com/SukiSU-Nova/SukiSU-Nova/main/kernel/setup.sh" | bash -s "$SUKISU_NOVA_BRANCH"
+            curl -LSs "https://git.zako.shirkneko.top:20004/shirkneko/SukiSU/raw/branch/main/kernel/setup.sh" | bash -s "$SUKISU_NOVA_BRANCH"
             cd ./KernelSU
             # 对齐 get-manager 选定的提交：builtin 分支与 main 内容不同，不能直接检出，
             # 改为把内核侧版本来源 REPO_BRANCH 改写为该提交（main 在 kernel/Kbuild，builtin 在 kernel/Makefile）
             if [ -n "$KSU_PIN" ]; then
               if ! git fetch -q origin "$KSU_PIN" 2>/dev/null; then
-                echo "管理器构建提交 $KSU_PIN 已存在于本地克隆，跳过 fetch"
+                # 上游 Forgejo 不允许按未取到的 SHA 直接 fetch，整仓补一次分支与标签
+                git fetch -q origin '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*' 2>/dev/null || true
               fi
               if ! git cat-file -e "$KSU_PIN^{commit}" 2>/dev/null; then
                 echo "::error::管理器构建提交 $KSU_PIN 不在 KernelSU 仓库中，无法对齐版本来源"

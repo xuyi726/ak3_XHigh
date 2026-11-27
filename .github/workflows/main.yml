@@ -537,7 +537,7 @@ jobs:
       - name: 获取 KernelSU 提交信息
         run: |
           case "${{ inputs.kernelsu_variant }}" in
-            "SukiSU-Nova") REPO_URL="https://github.com/SukiSU-Nova/SukiSU-Nova.git"; REPO_URL2="SukiSU-Nova/SukiSU-Nova" ;;
+            "SukiSU-Nova") REPO_URL="https://git.zako.shirkneko.top:20004/shirkneko/SukiSU.git"; REPO_URL2="git.zako.shirkneko.top:20004/shirkneko/SukiSU" ;;
             "BakaSU") REPO_URL="https://github.com/Baka-SU/BakaSU.git"; REPO_URL2="Baka-SU/BakaSU" ;;
             "FinaSU") REPO_URL="https://github.com/LyraVoid/FinaSU.git"; REPO_URL2="LyraVoid/FinaSU" ;;
           esac

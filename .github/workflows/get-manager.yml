@@ -174,7 +174,7 @@ jobs:
 
           if [ "${{ inputs.kernelsu_variant }}" == "SukiSU-Nova" ]; then
             echo "This is the SukiSU-Nova variant"
-            git clone https://github.com/SukiSU-Nova/SukiSU-Nova.git KernelSU
+            git clone https://git.zako.shirkneko.top:20004/shirkneko/SukiSU.git KernelSU
           elif [ "${{ inputs.kernelsu_variant }}" == "BakaSU" ]; then
             echo "This is the BakaSU variant"
             git clone https://github.com/Baka-SU/BakaSU.git KernelSU
@@ -228,10 +228,31 @@ jobs:
           esac
           echo "构建通道: $CHANNEL_RAW -> $CHANNEL_KIND (pin_mode=$PIN_MODE)"
 
+          # 上游仓库：SukiSU-Nova 已迁到自建 Forgejo（git.zako.shirkneko.top），
+          # 版本公式、管理器 versionCode 与发布都只在这个仓库更新；GitHub 上的
+          # SukiSU-Nova/SukiSU-Nova 只是停在改名前的镜像，版本号会整体偏高。
           case "${{ inputs.kernelsu_variant }}" in
-            "SukiSU-Nova") REPO="SukiSU-Nova/SukiSU-Nova"; PREF="universal" ;;
-            "BakaSU") REPO="Baka-SU/BakaSU";           PREF="arm64" ;;
-            "FinaSU") REPO="LyraVoid/FinaSU";          PREF="universal" ;;
+            "SukiSU-Nova")
+              REPO="shirkneko/SukiSU"
+              PREF="universal"
+              API_BASE="https://git.zako.shirkneko.top:20004/api/v1/repos/shirkneko/SukiSU"
+              GIT_URL="https://git.zako.shirkneko.top:20004/shirkneko/SukiSU.git"
+              AUTH_HEADER=""
+              ;;
+            "BakaSU")
+              REPO="Baka-SU/BakaSU"
+              PREF="arm64"
+              API_BASE="https://api.github.com/repos/Baka-SU/BakaSU"
+              GIT_URL="https://github.com/Baka-SU/BakaSU.git"
+              AUTH_HEADER="Authorization: token ${{ secrets.GITHUB_TOKEN }}"
+              ;;
+            "FinaSU")
+              REPO="LyraVoid/FinaSU"
+              PREF="universal"
+              API_BASE="https://api.github.com/repos/LyraVoid/FinaSU"
+              GIT_URL="https://github.com/LyraVoid/FinaSU.git"
+              AUTH_HEADER="Authorization: token ${{ secrets.GITHUB_TOKEN }}"
+              ;;
             *) echo "::error::未知变体"; exit 1 ;;
           esac
 
@@ -243,18 +264,36 @@ jobs:
           } >> "$GITHUB_ENV"
 
           if [ "$CHANNEL_KIND" != "release" ]; then
-            echo "最新通道：内核锁定默认分支 HEAD，管理器取与 HEAD 版本一致的最新构建"
-            exit 0
+            # SukiSU-Nova 的测试版管理器只存在于上游 Forgejo Actions 产物里
+            # （滚动发布只镜像到 cnb.cool，下载需登录）；产物只保留 7 天，
+            # 没有可用产物时退回正式版 Release，避免本次构建拿不到管理器。
+            if [ "${{ inputs.kernelsu_variant }}" = "SukiSU-Nova" ]; then
+              ART_COUNT=$(curl -s --fail --max-time 30 "$API_BASE/actions/artifacts?limit=50" 2>/dev/null \
+                | jq "[ .[] | select(.name == \"sukisu-manager\" and (.expired | not)) ] | length" 2>/dev/null || echo 0)
+              if [ "${ART_COUNT:-0}" -eq 0 ]; then
+                echo "::warning title=最新通道回退::上游 Forgejo 暂无未过期的测试版管理器产物（Actions 仅保留 7 天），本次改用正式版 Release"
+                CHANNEL_KIND="release"; PIN_MODE="pin"
+                echo "CHANNEL_KIND=$CHANNEL_KIND" >> "$GITHUB_ENV"
+                echo "PIN_MODE=$PIN_MODE" >> "$GITHUB_ENV"
+              fi
+            fi
+            if [ "$CHANNEL_KIND" != "release" ]; then
+              echo "最新通道：内核锁定默认分支 HEAD，管理器取与 HEAD 版本一致的最新构建"
+              exit 0
+            fi
           fi
 
           # ---------- 正式通道：解析官方 Release ----------
           REL_JSON=""
           for ATTEMPT in 1 2 3; do
-            REL_JSON=$(curl -s --fail --max-time 30 \
-              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/$REPO/releases?per_page=40") \
-              && [ -n "$REL_JSON" ] && break
+            if [ -n "${AUTH_HEADER:-}" ]; then
+              REL_JSON=$(curl -s --fail --max-time 30 -H "$AUTH_HEADER" \
+                -H "Accept: application/vnd.github+json" \
+                "$API_BASE/releases?per_page=40&limit=40") && [ -n "$REL_JSON" ] && break
+            else
+              REL_JSON=$(curl -s --fail --max-time 30 \
+                "$API_BASE/releases?limit=40") && [ -n "$REL_JSON" ] && break
+            fi
             echo "获取 $REPO 的 Release 列表失败，重试 ($ATTEMPT/3)..."
             REL_JSON=""
             sleep 5
@@ -304,10 +343,10 @@ jobs:
           REL_COMMIT=$(git -C KernelSU rev-parse "${REL_TAG}^{commit}" 2>/dev/null || true)
           if [ -z "$REL_COMMIT" ]; then
             # annotated tag 需解引用，否则拿到的是标签对象而非提交
-            REL_COMMIT=$(git ls-remote "https://github.com/$REPO.git" "refs/tags/${REL_TAG}^{}" 2>/dev/null | awk '{print $1}')
+            REL_COMMIT=$(git ls-remote "$GIT_URL" "refs/tags/${REL_TAG}^{}" 2>/dev/null | awk '{print $1}')
           fi
           if [ -z "$REL_COMMIT" ]; then
-            REL_COMMIT=$(git ls-remote "https://github.com/$REPO.git" "refs/tags/${REL_TAG}" 2>/dev/null | awk '{print $1}')
+            REL_COMMIT=$(git ls-remote "$GIT_URL" "refs/tags/${REL_TAG}" 2>/dev/null | awk '{print $1}')
           fi
           if [ -z "$REL_COMMIT" ]; then
             echo "::warning title=正式通道回退::无法解析 Release $REL_TAG 对应的提交，改用官方默认分支最新上传构建"

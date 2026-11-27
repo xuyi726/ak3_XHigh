@@ -12,10 +12,25 @@ set -e
 
 VARIANT="${KSU_VARIANT:-}"
 
+# SukiSU-Nova 的上游是自建 Forgejo（git.zako.shirkneko.top/shirkneko/SukiSU）：
+# 改名、版本公式与管理器构建都只在那里更新；GitHub 上的 SukiSU-Nova/SukiSU-Nova
+# 停在改名前的镜像，提交历史也是另一套，按它算出来的版本会整体偏高（40xxx）。
 case "$VARIANT" in
-  "SukiSU-Nova") REPO="SukiSU-Nova/SukiSU-Nova"; EXPECTED_BRANCH="main" ;;
-  "BakaSU") REPO="Baka-SU/BakaSU";           EXPECTED_BRANCH="main" ;;
-  "FinaSU") REPO="LyraVoid/FinaSU";          EXPECTED_BRANCH="master" ;;
+  "SukiSU-Nova")
+    REPO="shirkneko/SukiSU";           EXPECTED_BRANCH="main"
+    API_BASE="https://git.zako.shirkneko.top:20004/api/v1/repos/shirkneko/SukiSU"
+    GIT_URL="https://git.zako.shirkneko.top:20004/shirkneko/SukiSU.git"
+    ;;
+  "BakaSU")
+    REPO="Baka-SU/BakaSU";             EXPECTED_BRANCH="main"
+    API_BASE="https://api.github.com/repos/$REPO"
+    GIT_URL="https://github.com/$REPO.git"
+    ;;
+  "FinaSU")
+    REPO="LyraVoid/FinaSU";            EXPECTED_BRANCH="master"
+    API_BASE="https://api.github.com/repos/$REPO"
+    GIT_URL="https://github.com/$REPO.git"
+    ;;
   *) echo "::error::未知变体: $VARIANT"; exit 1 ;;
 esac
 
@@ -176,11 +191,90 @@ if [ "$VARIANT" == "FinaSU" ] && [ "${PIN_MODE:-pin}" != "head" ]; then
   exit 0
 fi
 
-# ---------- 最新通道：官方 CI 构建的管理器（SukiSU-Nova / BakaSU / FinaSU） ----------
-# SukiSU-Nova 没有可匿名访问的滚动发布源：上游滚动管理器只发布在 cnb.cool
-# （sukisu-nova/Release，下载需登录）和 Forgejo（manager-ci Release 不含资产），
-# GitHub 上只有正式版 Release 与 build-manager.yml 的 Actions 产物，
-# 因此最新通道直接取官方 CI 产出的 Manager 包，并按该构建提交锁定内核。
+# ---------- 最新通道：官方 CI 构建的管理器（BakaSU / FinaSU） ----------
+# SukiSU-Nova 在上面单独处理（上游 Forgejo 的 Actions 产物）；这里只处理仍托管在
+# GitHub 的两种变体，直接取官方 CI 产出的管理器包，并按该构建提交锁定内核。
+# ---------- SukiSU-Nova 最新通道：上游 Forgejo 的 Manager 产物 ----------
+# 上游的滚动测试包只镜像到 cnb.cool（下载需登录），能匿名取到的最新测试管理器是
+# Forgejo Actions 里的 sukisu-manager 产物（APK 名自带 versionCode）。取其中最新
+# 未过期的一个，并按它的构建提交锁定内核，保证版本同源。
+if [ "$VARIANT" = "SukiSU-Nova" ] && [ "${PIN_MODE:-pin}" = "head" ]; then
+  ART_ROW=$(curl -s --fail --max-time 30 "$API_BASE/actions/artifacts?limit=50" 2>/dev/null | jq -r '
+      [ .[] | select(.name == "sukisu-manager" and (.expired | not)) ]
+      | sort_by(.created_at) | reverse | .[0]
+      | if . then [ .id, .run_id, .created_at, .archive_download_url ] | @tsv else empty end' 2>/dev/null || true)
+  if [ -z "$ART_ROW" ]; then
+    echo "::error::上游 Forgejo 暂无未过期的 sukisu-manager 产物（Actions 仅保留 7 天），无法取得测试版管理器"
+    echo "ksuCommit=" >> $GITHUB_OUTPUT
+    exit 1
+  fi
+  IFS=$'\t' read -r ART_ID ART_RUN ART_CREATED ART_URL <<< "$ART_ROW"
+  echo "下载上游测试版管理器产物 $ART_ID（构建 $ART_RUN，$ART_CREATED）..."
+  rm -rf manager-artifacts
+  mkdir -p manager-artifacts
+  if ! curl -sL --fail --retry 3 --max-time 600 -o manager-artifacts/sukisu-manager.zip "$ART_URL" \
+     || ! unzip -oq manager-artifacts/sukisu-manager.zip -d manager-artifacts/sukisu-manager; then
+    echo "::error::下载或解压上游 Manager 产物失败"
+    echo "ksuCommit=" >> $GITHUB_OUTPUT
+    exit 1
+  fi
+  rm -f manager-artifacts/sukisu-manager.zip
+  APK_FILE=$(find manager-artifacts -type f -name "*release.apk" ! -name "*debug*" | head -n 1)
+  if [ -z "$APK_FILE" ]; then
+    echo "::error::上游 Manager 产物中没有 release APK"
+    echo "ksuCommit=" >> $GITHUB_OUTPUT
+    exit 1
+  fi
+  CLEAN_NAME=$(basename "$APK_FILE" | sed -E 's/-(arm64-v8a|armeabi-v7a|armv7|riscv64|x86_64|x86|universal)-release\.apk$/.apk/')
+  MANAGER_VERSION=$(echo "$CLEAN_NAME" | grep -oE '_[0-9]+' | tail -n 1 | tr -d '_')
+  if ! [[ "${MANAGER_VERSION:-}" =~ ^[0-9]+$ ]]; then
+    echo "::error::无法从上游 Manager APK 文件名解析版本（$(basename "$APK_FILE")）"
+    echo "ksuCommit=" >> $GITHUB_OUTPUT
+    exit 1
+  fi
+
+  RUN_JSON=$(curl -s --fail --max-time 30 "$API_BASE/actions/runs/$ART_RUN" 2>/dev/null || true)
+  MANAGER_HEAD_SHA=$(printf '%s' "$RUN_JSON" | jq -r '.commit_sha // empty')
+  ART_BRANCH=$(printf '%s' "$RUN_JSON" | jq -r '.prettyref // empty')
+  if [ -n "$ART_BRANCH" ] && [ "$ART_BRANCH" != "$EXPECTED_BRANCH" ]; then
+    echo "::warning title=SukiSU-Nova 最新通道::该测试版管理器构建在 $ART_BRANCH 分支（非 $EXPECTED_BRANCH），内核版本仍按其提交对齐"
+  fi
+  if [ -z "$MANAGER_HEAD_SHA" ]; then
+    echo "::error::无法解析构建 $ART_RUN 对应的提交"
+    echo "ksuCommit=" >> $GITHUB_OUTPUT
+    exit 1
+  fi
+  if ! git -C KernelSU cat-file -e "${MANAGER_HEAD_SHA}^{commit}" 2>/dev/null; then
+    git -C KernelSU fetch -q origin "$MANAGER_HEAD_SHA" 2>/dev/null \
+      || git -C KernelSU fetch -q origin '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*' 2>/dev/null || true
+  fi
+
+  PINNED_KSU_VERSION=$(ksu_version_of "$MANAGER_HEAD_SHA" 2>/dev/null || true)
+  echo "管理器 APK 实测版本 $MANAGER_VERSION，构建提交 ${MANAGER_HEAD_SHA:0:8} 对应 KSU 版本 ${PINNED_KSU_VERSION:-未知}"
+  if [ -n "$PINNED_KSU_VERSION" ] && [ "$MANAGER_VERSION" != "$PINNED_KSU_VERSION" ]; then
+    echo "::warning::Manager 实测版本 $MANAGER_VERSION 与构建提交对应的 KSU 版本 $PINNED_KSU_VERSION 不一致"
+  fi
+
+  HEAD_SHA=$(git -C KernelSU rev-parse "origin/${EXPECTED_BRANCH}^{commit}" 2>/dev/null || true)
+  HEAD_VERSION=""
+  if [ -n "$HEAD_SHA" ]; then
+    HEAD_VERSION=$(ksu_version_of "$HEAD_SHA" 2>/dev/null || true)
+  fi
+  CI_VERSION=$(curl -s --fail --max-time 20 "$API_BASE/releases/tags/manager-ci" 2>/dev/null \
+    | jq -r '.name // empty' | grep -oE '[0-9]{4,}' | tail -n 1 || true)
+  if [ -n "$CI_VERSION" ] && [ "$CI_VERSION" -gt "$MANAGER_VERSION" ] 2>/dev/null; then
+    echo "::warning title=SukiSU-Nova 最新通道::上游滚动测试版已是 $CI_VERSION（只发布在 cnb.cool，下载需登录），本次能匿名取到的是 $MANAGER_VERSION"
+  fi
+  if [ -n "$HEAD_VERSION" ] && [ "$HEAD_VERSION" != "$MANAGER_VERSION" ]; then
+    echo "::warning title=SukiSU-Nova 最新通道::管理器构建 ${MANAGER_HEAD_SHA:0:8} 早于 $EXPECTED_BRANCH HEAD（HEAD 版本 $HEAD_VERSION），本次锁定该构建提交"
+  fi
+  echo "最新通道：内核锁定上游构建提交 ${MANAGER_HEAD_SHA:0:8}，管理器版本 $MANAGER_VERSION"
+  echo "MANAGER_VERSION=$MANAGER_VERSION" >> $GITHUB_ENV
+  echo "managerVer=$MANAGER_VERSION" >> $GITHUB_OUTPUT
+  echo "ksuCommit=$MANAGER_HEAD_SHA" >> $GITHUB_OUTPUT
+  exit 0
+fi
+
 get_manager_artifacts() {
   local artifacts="$1"
   if [ "$VARIANT" == "FinaSU" ]; then
@@ -191,11 +285,6 @@ get_manager_artifacts() {
   elif [ "$VARIANT" == "BakaSU" ]; then
     printf '%s' "$artifacts" | jq -r \
       '.artifacts[] | select(.name == "Manager-release" or .name == "Spoofed-Manager-release") | "\(.name)\t\(.archive_download_url)"'
-  else
-    # SukiSU-Nova 的正式分发产物名固定为 Manager；Manager-gradle / Manager-mappings
-    # 是未重签的中间产物，Manager-spoofed-* 的包名被改写，都不能当管理器分发。
-    printf '%s' "$artifacts" | jq -r \
-      '.artifacts[] | select(.name == "Manager") | "\(.name)\t\(.archive_download_url)"'
   fi
 }
 
@@ -212,7 +301,7 @@ HEAD_VERSION=""
 if [ "${PIN_MODE:-pin}" = "head" ] && [ "$LATEST_PICK_BUILD" = 0 ]; then
   HEAD_SHA=$(git -C KernelSU rev-parse "origin/${EXPECTED_BRANCH}^{commit}" 2>/dev/null || true)
   if [ -z "$HEAD_SHA" ]; then
-    HEAD_SHA=$(git ls-remote "https://github.com/$REPO.git" "refs/heads/$EXPECTED_BRANCH" 2>/dev/null | awk '{print $1}')
+    HEAD_SHA=$(git ls-remote "$GIT_URL" "refs/heads/$EXPECTED_BRANCH" 2>/dev/null | awk '{print $1}')
   fi
   if [ -n "$HEAD_SHA" ]; then
     git -C KernelSU cat-file -e "${HEAD_SHA}^{commit}" 2>/dev/null || git -C KernelSU fetch -q origin "$HEAD_SHA" 2>/dev/null || true
@@ -228,7 +317,7 @@ fi
 # 注意：runs 列表 API 的排序/缓存在部分仓库不可靠（可能漏掉最新构建），
 # 而 created 日期过滤参数走可靠查询路径，因此按日期窗口从今天往回推进检索
 FILENAME="build-manager.yml"
-RUNS_BASE="https://api.github.com/repos/$REPO/actions/workflows/$FILENAME/runs?status=success"
+RUNS_BASE="$API_BASE/actions/workflows/$FILENAME/runs?status=success"
 CAND_FILE=$(mktemp)
 TODAY=$(date -u +%Y-%m-%d)
 
@@ -342,7 +431,7 @@ MANAGER_BRANCH=""
 MANAGER_APK=""
 while IFS=$'\t' read -r PRIO CREATED BUILD_ID CAND_SHA CAND_BRANCH; do
   ARTIFACTS=$(curl -s -H "Authorization: token $GH_TOKEN" \
-    "https://api.github.com/repos/$REPO/actions/runs/$BUILD_ID/artifacts")
+    "$API_BASE/actions/runs/$BUILD_ID/artifacts")
   CANDIDATE_LIST=$(get_manager_artifacts "$ARTIFACTS")
   if [ -z "$CANDIDATE_LIST" ]; then
     echo "跳过构建 $BUILD_ID ($CAND_BRANCH, $CREATED): 未找到可用的管理器产物"

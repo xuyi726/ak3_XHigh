@@ -58,7 +58,7 @@ Built upon [AnyKernel3](https://github.com/osm0sis/AnyKernel3), this repository 
    - `ksu_variant`: KernelSU variant (SukiSU-Nova / BakaSU / FinaSU)
    - `build_channel`: build channel
      - `正式 (Release)`: manager APK taken from the latest **stable** upstream Release (`prerelease=false`) and the kernel pinned to that release tag commit, so manager and kernel come from the same source tree; when the upstream only ships rc/pre-releases (e.g. BakaSU), the newest official default-branch build is used and pinned instead
-     - `最新 (HEAD)`: kernel pinned to the default-branch HEAD, and the manager is the official CI build whose version matches HEAD (SukiSU-Nova / BakaSU; FinaSU uses the latest Release). When no build matches HEAD, the kernel is pinned to the selected manager build's commit instead, so kernel and manager still come from the same source tree. SukiSU-Nova only accepts builds from the official `main` branch
+     - `最新 (HEAD)`: kernel pinned to the default-branch HEAD, and the manager is the official CI build whose version matches HEAD (SukiSU-Nova / BakaSU; FinaSU uses the latest Release). When no build matches HEAD, the kernel is pinned to the selected manager build's commit instead, so kernel and manager still come from the same source tree. For SukiSU-Nova the sources are the upstream Forgejo repo (`git.zako.shirkneko.top/shirkneko/SukiSU`) and the manager comes from its newest non-expired `sukisu-manager` action artifact; newer rolling builds are published to cnb.cool only (login required) and the log says so explicitly. When no artifact is available the channel falls back to the newest stable Release
      - Both channels print the selected channel, pinned commit and manager version in the logs and the run summary
    - Feature switches: `enable_susfs`, `use_zram`, `use_bbg`, `use_net_enhance`, `use_kpm`, etc.
 4. Once the build finishes, download the **Artifacts** from the run page:
@@ -83,7 +83,7 @@ A commit is a hash string representing the state of a repository at a certain po
 **How to get a commit hash?**
 
 - SUSFS: [susfs4ksu](https://gitlab.com/simonpunk/susfs4ksu) (GitLab → Repository → Commits)
-- SukiSU-Nova: [SukiSU-Nova](https://github.com/SukiSU-Nova/SukiSU-Nova/commits) (GitHub commit history page)
+- SukiSU-Nova: [SukiSU-Nova](https://git.zako.shirkneko.top:20004/shirkneko/SukiSU/commits/branch/main) (上游自建 Forgejo 的提交历史)
 
 ## 🛠️ Recommended After Installation
 ### 🔧 Xposed Modules

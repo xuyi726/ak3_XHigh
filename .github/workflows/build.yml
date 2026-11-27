@@ -299,7 +299,7 @@ jobs:
 
           echo "准备补丁资源..."
           clone_with_retry https://github.com/WildKernels/kernel_patches.git kernel_patches
-          clone_with_retry https://github.com/SukiSU-Nova/SukiSU_patch.git SukiSU_patch
+          clone_with_retry https://git.zako.shirkneko.top:20004/shirkneko/SukiSU_Patch.git SukiSU_patch
           echo "使用当前仓库补丁目录: $ZZH_PATCHES"
           clone_with_retry https://github.com/Numbersf/Action-Build.git Action-Build --depth=1
 
@@ -478,7 +478,7 @@ jobs:
           case "${{ inputs.ksu_variant }}" in
             "SukiSU-Nova")
               echo "添加 ${{ inputs.ksu_variant }}..."
-              curl -LSs "https://raw.githubusercontent.com/SukiSU-Nova/SukiSU-Nova/main/kernel/setup.sh" | bash $BRANCH
+              curl -LSs "https://git.zako.shirkneko.top:20004/shirkneko/SukiSU/raw/branch/main/kernel/setup.sh" | bash $BRANCH
               # 内核侧 KSU 版本来源对齐官方最新上传 Manager 构建：
               # 版本公式（VERSION_BASE/OFFSET 与加减号）随上游发布变化，
               # 统一由 .github/scripts/ksu-version.sh 读源码求值（main 在
@@ -488,7 +488,8 @@ jobs:
                 echo "SukiSU-Nova 使用自定义提交（$BRANCH），跳过管理器版本对齐"
               elif [ -n "$KSU_COMMIT" ]; then
                 if ! git -C KernelSU fetch origin "$KSU_COMMIT" 2>/dev/null; then
-                  echo "官方构建提交 $KSU_COMMIT 已存在于本地克隆，跳过 fetch"
+                  # 上游 Forgejo 不允许按未取到的 SHA 直接 fetch，整仓补一次分支与标签
+                  git -C KernelSU fetch -q origin '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*' 2>/dev/null || true
                 fi
                 if ! git -C KernelSU cat-file -e "$KSU_COMMIT^{commit}" 2>/dev/null; then
                   echo "::error::官方构建提交 $KSU_COMMIT 不在 KernelSU 仓库中，无法对齐版本来源"
