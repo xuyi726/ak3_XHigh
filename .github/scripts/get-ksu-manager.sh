@@ -59,12 +59,24 @@ match_version_commit() {
   return 1
 }
 
-# 在默认分支上从 HEAD 往回找版本号等于 $1 的提交（版本随提交数单调递减）。
-# 用于 cnb 只给出管理器 APK、不给构建提交的情况。
+# 在默认分支上反解版本号等于 $1 的提交。
+# 版本 = BASE + 提交数 ± OFFSET：提交数每多一笔版本就变一，所以先用 HEAD 的版本差
+# 算出目标提交数，再按位置取候选。只用一次 rev-list 列出提交，不再逐个 git show
+# （blob:none 的克隆下每次 show 都要单独拉一个 blob，几十次会把时间全耗在网络上）。
 nova_version_commit() {
-  local want="$1" limit="${2:-80}" sha
-  for sha in $(git -C KernelSU rev-list "origin/${EXPECTED_BRANCH}" --first-parent 2>/dev/null | head -n "$limit"); do
-    if [ "$(ksu_version_of "$sha")" = "$want" ]; then
+  local want="$1" total head_version target pos sha delta
+  total=$(git -C KernelSU rev-list --count "origin/${EXPECTED_BRANCH}" 2>/dev/null) || return 1
+  head_version=$(ksu_version_of "origin/${EXPECTED_BRANCH}" 2>/dev/null) || return 1
+  case "$head_version" in ''|*[!0-9]*) return 1 ;; esac
+  target=$(( total + want - head_version ))
+  [ "$target" -ge 1 ] && [ "$target" -le "$total" ] || return 1
+  # 合并提交会让位置与 rev-list 计数略有偏差，就近再多试两个位置
+  for delta in 0 -1 1 -2 2; do
+    pos=$(( target + delta ))
+    [ "$pos" -ge 1 ] && [ "$pos" -le "$total" ] || continue
+    sha=$(git -C KernelSU rev-list --reverse "origin/${EXPECTED_BRANCH}" 2>/dev/null | sed -n "${pos}p")
+    [ -n "$sha" ] || continue
+    if [ "$(ksu_version_of "$sha" 2>/dev/null)" = "$want" ]; then
       echo "$sha"
       return 0
     fi
@@ -237,7 +249,13 @@ if [ "$VARIANT" = "SukiSU-Nova" ] && [ "${PIN_MODE:-pin}" = "head" ]; then
         CLEAN_NAME=$(basename "$CNB_NAME" | sed -E 's/-(arm64-v8a|armeabi-v7a|armv7|riscv64|x86_64|x86|universal)-release\.apk$/.apk/')
         MANAGER_VERSION=$(echo "$CLEAN_NAME" | grep -oE '_[0-9]+' | tail -n 1 | tr -d '_')
         if [[ "${MANAGER_VERSION:-}" =~ ^[0-9]+$ ]]; then
-          PIN_SHA=$(nova_version_commit "$MANAGER_VERSION" 80 || true)
+          # cnb 的 Release 元数据带 target_commitish 时直接用它，省掉反解
+          PIN_SHA=""
+          CNB_SHA=$(printf '%s' "$CNB_REL" | jq -r '.target_commitish // empty' 2>/dev/null || true)
+          if [ -n "$CNB_SHA" ] && [ "$(ksu_version_of "$CNB_SHA" 2>/dev/null || true)" = "$MANAGER_VERSION" ]; then
+            PIN_SHA="$CNB_SHA"
+          fi
+          [ -n "$PIN_SHA" ] || PIN_SHA=$(nova_version_commit "$MANAGER_VERSION" 80 || true)
           if [ -z "$PIN_SHA" ]; then
             echo "::warning title=SukiSU-Nova 最新通道::默认分支最近提交里没有版本 $MANAGER_VERSION，内核改为锁定 HEAD"
             PIN_SHA=$(git -C KernelSU rev-parse "origin/${EXPECTED_BRANCH}^{commit}" 2>/dev/null || true)

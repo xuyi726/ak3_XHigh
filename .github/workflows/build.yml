@@ -478,6 +478,16 @@ jobs:
           case "${{ inputs.ksu_variant }}" in
             "SukiSU-Nova")
               echo "添加 ${{ inputs.ksu_variant }}..."
+              # 上游整包约 78MB（大头是管理器资源和历史 blob），setup.sh 自己 clone 要三四分钟。
+              # 先做一个只取提交/树对象的克隆（约 7MB），并把工作区限制在 kernel 与 uapi；
+              # setup.sh 看到 KernelSU 已存在就只做 pull/checkout，不再整包拉取。
+              if [ ! -d KernelSU/.git ]; then
+                git clone -q --filter=blob:none --no-checkout \
+                  https://git.zako.shirkneko.top:20004/shirkneko/SukiSU.git KernelSU
+                git -C KernelSU sparse-checkout init --cone
+                git -C KernelSU sparse-checkout set kernel uapi
+                git -C KernelSU checkout -q main
+              fi
               curl -LSs "https://git.zako.shirkneko.top:20004/shirkneko/SukiSU/raw/branch/main/kernel/setup.sh" | bash $BRANCH
               # 内核侧 KSU 版本来源对齐官方最新上传 Manager 构建：
               # 版本公式（VERSION_BASE/OFFSET 与加减号）随上游发布变化，

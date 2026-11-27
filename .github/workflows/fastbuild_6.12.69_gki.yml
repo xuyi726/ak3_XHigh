@@ -398,6 +398,16 @@ jobs:
             else
               SUKISU_NOVA_BRANCH=main
             fi
+            # 上游整包约 78MB，setup.sh 自己 clone 要三四分钟；先做一个只取
+            # 提交/树对象的克隆（约 7MB），工作区限制在 kernel 与 uapi，
+            # setup.sh 看到 KernelSU 已存在就只做 pull/checkout。
+            if [ ! -d KernelSU/.git ]; then
+              git clone -q --filter=blob:none --no-checkout \
+                https://git.zako.shirkneko.top:20004/shirkneko/SukiSU.git KernelSU
+              git -C KernelSU sparse-checkout init --cone
+              git -C KernelSU sparse-checkout set kernel uapi
+              git -C KernelSU checkout -q main
+            fi
             curl -LSs "https://git.zako.shirkneko.top:20004/shirkneko/SukiSU/raw/branch/main/kernel/setup.sh" | bash -s "$SUKISU_NOVA_BRANCH"
             cd ./KernelSU
             # 对齐 get-manager 选定的提交：SukiSU-Nova 的 builtin 分支与 main 内容不同，不能直接检出，

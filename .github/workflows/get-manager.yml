@@ -174,7 +174,10 @@ jobs:
 
           if [ "${{ inputs.kernelsu_variant }}" == "SukiSU-Nova" ]; then
             echo "This is the SukiSU-Nova variant"
-            git clone https://git.zako.shirkneko.top:20004/shirkneko/SukiSU.git KernelSU
+            # 上游整包约 78MB（大头是管理器资源和历史 blob），CI 上完整克隆要三四分钟。
+            # 这里只取提交与树对象（--filter=blob:none，约 7MB），需要某个文件时 git 再按需
+            # 抓那一个 blob；版本号用本地 rev-list 统计，不额外依赖网络接口。
+            git clone --filter=blob:none --no-checkout https://git.zako.shirkneko.top:20004/shirkneko/SukiSU.git KernelSU
           elif [ "${{ inputs.kernelsu_variant }}" == "BakaSU" ]; then
             echo "This is the BakaSU variant"
             git clone https://github.com/Baka-SU/BakaSU.git KernelSU
@@ -220,7 +223,8 @@ jobs:
       #       BakaSU/FinaSU 直接取 build-manager.yml 最新构建，内核锁定该构建提交
       - name: 选择管理器来源（构建通道）
         env:
-          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
+          # secret 与 variable 都认，避免把它误存成「变量」时静默取到空值
+          CNB_TOKEN: ${{ secrets.CNB_TOKEN || vars.CNB_TOKEN }}
         run: |
 
           CHANNEL_RAW="${{ inputs.build_channel }}"
@@ -268,6 +272,21 @@ jobs:
           if [ "$CHANNEL_KIND" != "release" ]; then
             # SukiSU-Nova 的测试版管理器有两个来源：cnb.cool 的 manager-ci 附件
             # （需要 CNB_TOKEN）与上游 Forgejo Actions 产物（只保留 7 天）。
+            if [ "${{ inputs.kernelsu_variant }}" = "SukiSU-Nova" ]; then
+              if [ -n "${CNB_TOKEN:-}" ]; then
+                CNB_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 \
+                  -H "Authorization: Bearer $CNB_TOKEN" \
+                  -H "Accept: application/vnd.cnb.api+json" \
+                  "https://api.cnb.cool/sukisu-nova/Release/-/releases/tags/manager-ci" 2>/dev/null || true)
+                if [ "$CNB_CODE" = "200" ]; then
+                  echo "CNB_TOKEN 校验通过，滚动测试版管理器走 cnb"
+                else
+                  echo "::warning title=CNB_TOKEN 无效::cnb 返回 HTTP $CNB_CODE（需要 repo-release:r 权限），本次最新通道只能用 Forgejo 上的旧产物"
+                fi
+              else
+                echo "::warning title=缺少 CNB_TOKEN::工作流里 secrets.CNB_TOKEN 与 vars.CNB_TOKEN 都为空，滚动测试版管理器（只在 cnb.cool 发布）无法下载，最新通道只能用 Forgejo 上未过期的旧产物"
+              fi
+            fi
             # 两者都拿不到时退回正式版 Release，避免本次构建没有管理器。
             if [ "${{ inputs.kernelsu_variant }}" = "SukiSU-Nova" ]; then
               ART_COUNT=0
@@ -378,7 +397,7 @@ jobs:
           KSU_VARIANT: ${{ inputs.kernelsu_variant }}
           BUILD_CHANNEL_INPUT: ${{ inputs.build_channel }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
+          CNB_TOKEN: ${{ secrets.CNB_TOKEN || vars.CNB_TOKEN }}
         run: |
           bash "$GITHUB_WORKSPACE/.github/scripts/get-ksu-manager.sh"
 
