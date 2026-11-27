@@ -109,6 +109,57 @@ susfs_patch_drop_blk_h_context() {
 }
 susfs_patch_drop_blk_h_context
 
+# ---- 补丁的 fs/proc/task_mmu.c 第一个 hunk 要求一行新内核没有的 include ----
+# 主补丁那个 hunk 只做一件事：在 include 块末尾（`#include <trace/hooks/mm.h>`
+# 之后）插入 susfs_def.h。2025-12 起 AOSP 5.15.194 删掉了 task_mmu.c 里的
+# trace/hooks/mm.h，这行作为上下文缺失 → 整个 hunk 被拒，SUS_MAP/OPEN_REDIRECT
+# 判断全丢，编译报 SUSFS_IS_INODE_* 隐式声明（FinaSU android13-5.15.194 实测）。
+# 只按内容动手：补丁 task_mmu.c 段里有这行上下文、且目标树没有，就从该 hunk
+# 去掉它并修正行数；mm/memory.c 段那处上下文保持原样。
+susfs_patch_drop_task_mmu_mm_h_context() {
+  if ! perl -0777 -ne '
+    my ($cur, $ok);
+    for my $l (split /\n/) {
+      $cur = $1 if $l =~ m{^diff --git a/(\S+) b/};
+      if (defined $cur && $cur eq "fs/proc/task_mmu.c" && $l eq " #include <trace/hooks/mm.h>") { $ok = 1; last; }
+    }
+    exit($ok ? 0 : 1);
+  ' "$SUSFS_PATCH"; then
+    echo "SUSFS 补丁的 task_mmu.c hunk 不以 trace/hooks/mm.h 为上下文，跳过"
+    return 0
+  fi
+  if grep -qF '#include <trace/hooks/mm.h>' fs/proc/task_mmu.c; then
+    echo "目标内核 task_mmu.c 仍有 trace/hooks/mm.h，补丁上下文可用，保留不动"
+    return 0
+  fi
+  echo "目标内核 task_mmu.c 无 trace/hooks/mm.h：从补丁去掉该上下文行并修正 hunk 行数"
+  TARGET_FILE='fs/proc/task_mmu.c' perl -0777 -i -pe '
+    my $target = $ENV{TARGET_FILE};
+    my @L = split /(?<=\n)/, $_;
+    my ($hdr, @n, $cur, $hit);
+    for my $i (0 .. $#L) {
+      if ($L[$i] =~ m{^diff --git a/(\S+) b/}) { $cur = $1; $hdr = undef; next; }
+      if ($L[$i] =~ /^\@\@ /) {
+        if ($L[$i] =~ /^\@\@ -(\d+),(\d+) \+(\d+),(\d+) \@\@/) { $hdr = $i; @n = ($1, $2, $3, $4); }
+        else { $hdr = undef; }
+        next;
+      }
+      next unless defined $cur && $cur eq $target;
+      next unless $L[$i] eq " #include <trace/hooks/mm.h>\n";
+      die "mm.h 上下文行不在任何 hunk 内\n" unless defined $hdr;
+      (my $tail = $L[$hdr]) =~ s/^\@\@ -\d+,\d+ \+\d+,\d+ \@\@//;
+      $L[$hdr] = sprintf("\@\@ -%d,%d +%d,%d \@\@%s", $n[0], $n[1] - 1, $n[2], $n[3] - 1, $tail);
+      splice @L, $i, 1;
+      $hit = 1;
+      last;
+    }
+    die "补丁里找不到 task_mmu.c 的 mm.h 上下文行\n" unless $hit;
+    $_ = join "", @L;
+  ' "$SUSFS_PATCH" || { echo "::error::从 SUSFS 补丁去掉 task_mmu.c 的 mm.h 上下文行失败" >&2; exit 1; }
+  echo "SUSFS 补丁：task_mmu.c 的 mm.h 上下文行已去掉（hunk 行数同步修正）"
+}
+susfs_patch_drop_task_mmu_mm_h_context
+
 adjust_legacy_fdinfo_context() {
   sed -i '/^[[:space:]]*\/\*$/,/^[[:space:]]*u32 mask = mark->mask & IN_ALL_EVENTS;$/d' fs/notify/fdinfo.c
   perl -i -pe 's/\bmask,\s*mark->ignored_mask/inotify_mark_user_mask(mark)/g' fs/notify/fdinfo.c
@@ -154,7 +205,15 @@ if [[ "$ANDROID_VERSION" == "android13" && "$KERNEL_VERSION" == "5.15" ]]; then
       sed -i '/^#include <trace\/hooks\/blk.h>$/d' fs/namespace.c
       LTS_BLK_H_DELETED=1
     fi
-    sed -i '/^#include <trace\/hooks\/mm.h>$/d' fs/proc/task_mmu.c
+    # 同理：补丁把 ` #include <trace/hooks/mm.h>` 当作 task_mmu.c 第一个 hunk 的
+    # 上下文行（susfs_def.h 就插在它后面），删掉后这个 hunk 必然被拒，后面的
+    # SUS_MAP/OPEN_REDIRECT 判断全丢，编译报 SUSFS_IS_INODE_* 隐式声明。
+    if grep -q '^ #include <trace/hooks/mm\.h>' "$SUSFS_PATCH"; then
+      echo "SUSFS 补丁要求保留 task_mmu.c 的 trace/hooks/mm.h，跳过该临时调整"
+    else
+      sed -i '/^#include <trace\/hooks\/mm.h>$/d' fs/proc/task_mmu.c
+      LTS_MM_H_DELETED=1
+    fi
   fi
 fi
 
@@ -336,6 +395,43 @@ task_mmu_sus_map_rollup_compat() {
 }
 task_mmu_sus_map_rollup_compat
 
+# 主补丁 task_mmu.c 第一个 hunk 只干一件事：在 include 块末尾加 susfs_def.h。
+# 这行 include 是 SUS_MAP / OPEN_REDIRECT 判断的前提，一旦该 hunk 因上下文差异
+# 被拒（.rej 里只有这个 include），编译就报 SUSFS_IS_INODE_* 隐式声明。
+# 这里按「已用到却缺 include」自查补上，并把只含该 hunk 的 .rej 清掉。
+task_mmu_ensure_susfs_def_include() {
+  local f=fs/proc/task_mmu.c
+  [[ -f "$f" ]] || return 0
+  grep -qE 'SUSFS_IS_INODE_(SUS_MAP|OPEN_REDIRECT)' "$f" || return 0
+  grep -qF '#include <linux/susfs_def.h>' "$f" && return 0
+  echo "task_mmu.c 用到 SUSFS_IS_INODE_* 却缺少 susfs_def.h include，补上"
+  perl -0777 -i -pe '
+    my $nl = /\r\n/ ? "\r\n" : "\n";
+    my $blk = "#if defined(CONFIG_KSU_SUSFS_SUS_KSTAT) || defined(CONFIG_KSU_SUSFS_SUS_MAP) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)$nl"
+            . "#include <linux/susfs_def.h>$nl"
+            . "#endif // #if defined(CONFIG_KSU_SUSFS_SUS_KSTAT) || defined(CONFIG_KSU_SUSFS_SUS_MAP) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)$nl";
+    my $done = 0;
+    for my $a ("#include <trace/hooks/mm.h>", "#include <linux/pkeys.h>", "#include <linux/uaccess.h>") {
+      if (s/^(\Q$a\E\r?\n)/$1$blk/m) { $done = 1; last; }
+    }
+    die "task_mmu.c 找不到 include 插入位置\n" unless $done;
+  ' "$f" || { echo "::error::task_mmu.c 补 susfs_def.h include 失败" >&2; exit 1; }
+  if [[ -f fs/proc/task_mmu.c.rej ]] && perl -0777 -ne '
+    for my $l (split /\n/) {
+      next unless $l =~ /^\+/ && $l !~ /^\+\+\+ /;
+      next if $l =~ /^\+\s*$/;
+      next if $l =~ /^\+#\s*(if|ifdef|ifndef|endif)\b/;
+      next if $l =~ /^\+#\s*include\s+<linux\/susfs_def\.h>/;
+      exit 1;
+    }
+    exit 0;
+  ' fs/proc/task_mmu.c.rej; then
+    rm -f fs/proc/task_mmu.c.rej
+    echo "task_mmu.c 的 .rej 只差 susfs_def.h include，已补齐并删除该 .rej"
+  fi
+}
+task_mmu_ensure_susfs_def_include
+
 # 为尚未提供 SU 会话 FD 接口的 SukiSU-Nova/BakaSU 恢复旧版 exec hook 行为
 EXEC_HELPER=""
 if [[ "$KSU_VARIANT" == SukiSU-Nova* || "$KSU_VARIANT" == "BakaSU" || "$KSU_VARIANT" == "ReSukiSU" ]]; then
@@ -414,7 +510,7 @@ if [[ "$ANDROID_VERSION" == "android13" && "$KERNEL_VERSION" == "5.15" ]]; then
     if [ "${LTS_BLK_H_DELETED:-0}" = "1" ] && ! grep -qF '#include <trace/hooks/blk.h>' fs/namespace.c; then
       sed -i '/^#include "internal.h"$/a #include <trace/hooks/blk.h>' fs/namespace.c
     fi
-    if ! grep -qF '#include <trace/hooks/mm.h>' fs/proc/task_mmu.c; then
+    if [ "${LTS_MM_H_DELETED:-0}" = "1" ] && ! grep -qF '#include <trace/hooks/mm.h>' fs/proc/task_mmu.c; then
       sed -i '/^#include <linux\/pkeys.h>$/a #include <trace/hooks/mm.h>' fs/proc/task_mmu.c
     fi
   fi
