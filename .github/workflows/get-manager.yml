@@ -219,6 +219,8 @@ jobs:
       # 最新：管理器取与默认分支 HEAD 版本一致的最新构建（不限分支），内核锁定该 HEAD；
       #       BakaSU/FinaSU 直接取 build-manager.yml 最新构建，内核锁定该构建提交
       - name: 选择管理器来源（构建通道）
+        env:
+          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
         run: |
 
           CHANNEL_RAW="${{ inputs.build_channel }}"
@@ -264,14 +266,17 @@ jobs:
           } >> "$GITHUB_ENV"
 
           if [ "$CHANNEL_KIND" != "release" ]; then
-            # SukiSU-Nova 的测试版管理器只存在于上游 Forgejo Actions 产物里
-            # （滚动发布只镜像到 cnb.cool，下载需登录）；产物只保留 7 天，
-            # 没有可用产物时退回正式版 Release，避免本次构建拿不到管理器。
+            # SukiSU-Nova 的测试版管理器有两个来源：cnb.cool 的 manager-ci 附件
+            # （需要 CNB_TOKEN）与上游 Forgejo Actions 产物（只保留 7 天）。
+            # 两者都拿不到时退回正式版 Release，避免本次构建没有管理器。
             if [ "${{ inputs.kernelsu_variant }}" = "SukiSU-Nova" ]; then
-              ART_COUNT=$(curl -s --fail --max-time 30 "$API_BASE/actions/artifacts?limit=50" 2>/dev/null \
-                | jq "[ .[] | select(.name == \"sukisu-manager\" and (.expired | not)) ] | length" 2>/dev/null || echo 0)
-              if [ "${ART_COUNT:-0}" -eq 0 ]; then
-                echo "::warning title=最新通道回退::上游 Forgejo 暂无未过期的测试版管理器产物（Actions 仅保留 7 天），本次改用正式版 Release"
+              ART_COUNT=0
+              if [ -z "${CNB_TOKEN:-}" ]; then
+                ART_COUNT=$(curl -s --fail --max-time 30 "$API_BASE/actions/artifacts?limit=50" 2>/dev/null \
+                  | jq "[ .[] | select(.name == \"sukisu-manager\" and (.expired | not)) ] | length" 2>/dev/null || echo 0)
+              fi
+              if [ "${ART_COUNT:-0}" -eq 0 ] && [ -z "${CNB_TOKEN:-}" ]; then
+                echo "::warning title=最新通道回退::未配置 CNB_TOKEN 且上游 Forgejo 暂无未过期的测试版管理器产物，本次改用正式版 Release"
                 CHANNEL_KIND="release"; PIN_MODE="pin"
                 echo "CHANNEL_KIND=$CHANNEL_KIND" >> "$GITHUB_ENV"
                 echo "PIN_MODE=$PIN_MODE" >> "$GITHUB_ENV"
@@ -373,6 +378,7 @@ jobs:
           KSU_VARIANT: ${{ inputs.kernelsu_variant }}
           BUILD_CHANNEL_INPUT: ${{ inputs.build_channel }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
         run: |
           bash "$GITHUB_WORKSPACE/.github/scripts/get-ksu-manager.sh"
 

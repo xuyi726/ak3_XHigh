@@ -59,6 +59,19 @@ match_version_commit() {
   return 1
 }
 
+# 在默认分支上从 HEAD 往回找版本号等于 $1 的提交（版本随提交数单调递减）。
+# 用于 cnb 只给出管理器 APK、不给构建提交的情况。
+nova_version_commit() {
+  local want="$1" limit="${2:-80}" sha
+  for sha in $(git -C KernelSU rev-list "origin/${EXPECTED_BRANCH}" --first-parent 2>/dev/null | head -n "$limit"); do
+    if [ "$(ksu_version_of "$sha")" = "$want" ]; then
+      echo "$sha"
+      return 0
+    fi
+  done
+  return 1
+}
+
 # 通道兜底解析（选择步骤异常时仍能按输入判断）
 CHANNEL_KIND="${CHANNEL_KIND:-}"
 if [ -z "$CHANNEL_KIND" ]; then
@@ -199,6 +212,54 @@ fi
 # Forgejo Actions 里的 sukisu-manager 产物（APK 名自带 versionCode）。取其中最新
 # 未过期的一个，并按它的构建提交锁定内核，保证版本同源。
 if [ "$VARIANT" = "SukiSU-Nova" ] && [ "${PIN_MODE:-pin}" = "head" ]; then
+  # 优先 cnb.cool 的 manager-ci：滚动测试包只在那里保持最新（版本号取 APK 文件名）
+  if [ -n "${CNB_TOKEN:-}" ]; then
+    CNB_REL=$(curl -s --fail --max-time 30 \
+      -H "Authorization: Bearer $CNB_TOKEN" \
+      -H "Accept: application/vnd.cnb.api+json" \
+      "https://api.cnb.cool/sukisu-nova/Release/-/releases/tags/manager-ci" 2>/dev/null || true)
+    CNB_ROW=$(printf '%s' "$CNB_REL" | jq -r '
+        [ .assets[]? | select(.name | test("\\.apk$"; "i"))
+                      | select(.name | test("(?i)debug|spoofed") | not) ]
+        | sort_by( if (.name | test("(?i)universal")) then 0
+                   elif (.name | test("(?i)arm64")) then 1
+                   else 2 end )
+        | .[0]
+        | if . then [ .name, (.url // .browser_download_url), (.browser_download_url // "") ] | @tsv
+          else empty end' 2>/dev/null || true)
+    if [ -n "$CNB_ROW" ]; then
+      IFS=$'\t' read -r CNB_NAME CNB_URL CNB_WEB <<< "$CNB_ROW"
+      echo "从 cnb 下载测试版管理器: $CNB_NAME"
+      rm -rf manager-artifacts
+      mkdir -p manager-artifacts
+      if curl -sL --fail --retry 3 --max-time 600 -H "Authorization: Bearer $CNB_TOKEN" \
+        -o "manager-artifacts/$(basename "$CNB_NAME")" "$CNB_URL"; then
+        CLEAN_NAME=$(basename "$CNB_NAME" | sed -E 's/-(arm64-v8a|armeabi-v7a|armv7|riscv64|x86_64|x86|universal)-release\.apk$/.apk/')
+        MANAGER_VERSION=$(echo "$CLEAN_NAME" | grep -oE '_[0-9]+' | tail -n 1 | tr -d '_')
+        if [[ "${MANAGER_VERSION:-}" =~ ^[0-9]+$ ]]; then
+          PIN_SHA=$(nova_version_commit "$MANAGER_VERSION" 80 || true)
+          if [ -z "$PIN_SHA" ]; then
+            echo "::warning title=SukiSU-Nova 最新通道::默认分支最近提交里没有版本 $MANAGER_VERSION，内核改为锁定 HEAD"
+            PIN_SHA=$(git -C KernelSU rev-parse "origin/${EXPECTED_BRANCH}^{commit}" 2>/dev/null || true)
+          fi
+          if [ -n "$PIN_SHA" ]; then
+            echo "最新通道：管理器 $MANAGER_VERSION 取自 cnb，内核锁定提交 ${PIN_SHA:0:8}"
+            echo "MANAGER_VERSION=$MANAGER_VERSION" >> $GITHUB_ENV
+            echo "managerVer=$MANAGER_VERSION" >> $GITHUB_OUTPUT
+            echo "ksuCommit=$PIN_SHA" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+        fi
+        echo "::warning::cnb 管理器文件名无法解析版本（$(basename "$CNB_NAME")），改用 Forgejo 产物"
+      else
+        echo "::warning::从 cnb 下载管理器失败，改用 Forgejo 产物"
+      fi
+    else
+      echo "::warning::cnb 上没有 manager-ci 的 APK 资产（检查 CNB_TOKEN 是否有 repo-release:r 权限），改用 Forgejo 产物"
+    fi
+    rm -rf manager-artifacts
+  fi
+
   ART_ROW=$(curl -s --fail --max-time 30 "$API_BASE/actions/artifacts?limit=50" 2>/dev/null | jq -r '
       [ .[] | select(.name == "sukisu-manager" and (.expired | not)) ]
       | sort_by(.created_at) | reverse | .[0]
