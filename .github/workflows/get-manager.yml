@@ -270,32 +270,27 @@ jobs:
           } >> "$GITHUB_ENV"
 
           if [ "$CHANNEL_KIND" != "release" ]; then
-            # SukiSU-Nova 的测试版管理器有两个来源：cnb.cool 的 manager-ci 附件
-            # （需要 CNB_TOKEN）与上游 Forgejo Actions 产物（只保留 7 天）。
+            # SukiSU-Nova 的测试版管理器有两个来源：cnb.cool 的滚动测试包
+            # （公开可读，令牌可选）与上游 Forgejo Actions 产物（只保留 7 天）。
+            CNB_CODE=000
             if [ "${{ inputs.kernelsu_variant }}" = "SukiSU-Nova" ]; then
-              if [ -n "${CNB_TOKEN:-}" ]; then
-                CNB_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 \
-                  -H "Authorization: Bearer $CNB_TOKEN" \
-                  -H "Accept: application/vnd.cnb.api+json" \
-                  "https://api.cnb.cool/sukisu-nova/Release/-/releases/tags/manager-ci" 2>/dev/null || true)
-                if [ "$CNB_CODE" = "200" ]; then
-                  echo "CNB_TOKEN 校验通过，滚动测试版管理器走 cnb"
-                else
-                  echo "::warning title=CNB_TOKEN 无效::cnb 返回 HTTP $CNB_CODE（需要 repo-release:r 权限），本次最新通道只能用 Forgejo 上的旧产物"
-                fi
+              # 滚动测试包是 cnb.cool 上公开仓库（sukisu-nova/Release）manager-ci 分支里的
+              # 文件，匿名可读，不再依赖令牌；这里探一下可达性，结果留给后面的回退判断。
+              CNB_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 \
+                "https://cnb.cool/sukisu-nova/Release/-/git/raw/manager-ci/manifest.json" 2>/dev/null || true)
+              [ -n "$CNB_CODE" ] || CNB_CODE=000
+              if [ "$CNB_CODE" = "200" ]; then
+                echo "cnb 滚动测试包可访问（manager-ci）"
               else
-                echo "::warning title=缺少 CNB_TOKEN::工作流里 secrets.CNB_TOKEN 与 vars.CNB_TOKEN 都为空，滚动测试版管理器（只在 cnb.cool 发布）无法下载，最新通道只能用 Forgejo 上未过期的旧产物"
+                echo "::warning title=cnb 不可访问::manager-ci/manifest.json 返回 HTTP $CNB_CODE，最新通道只能退回 Forgejo 上未过期的旧产物"
               fi
             fi
             # 两者都拿不到时退回正式版 Release，避免本次构建没有管理器。
-            if [ "${{ inputs.kernelsu_variant }}" = "SukiSU-Nova" ]; then
-              ART_COUNT=0
-              if [ -z "${CNB_TOKEN:-}" ]; then
-                ART_COUNT=$(curl -s --fail --max-time 30 "$API_BASE/actions/artifacts?limit=50" 2>/dev/null \
-                  | jq "[ .[] | select(.name == \"sukisu-manager\" and (.expired | not)) ] | length" 2>/dev/null || echo 0)
-              fi
-              if [ "${ART_COUNT:-0}" -eq 0 ] && [ -z "${CNB_TOKEN:-}" ]; then
-                echo "::warning title=最新通道回退::未配置 CNB_TOKEN 且上游 Forgejo 暂无未过期的测试版管理器产物，本次改用正式版 Release"
+            if [ "${{ inputs.kernelsu_variant }}" = "SukiSU-Nova" ] && [ "${CNB_CODE:-000}" != "200" ]; then
+              ART_COUNT=$(curl -s --fail --max-time 30 "$API_BASE/actions/artifacts?limit=50" 2>/dev/null \
+                | jq "[ .[] | select(.name == \"sukisu-manager\" and (.expired | not)) ] | length" 2>/dev/null || echo 0)
+              if [ "${ART_COUNT:-0}" -eq 0 ]; then
+                echo "::warning title=最新通道回退::cnb 与上游 Forgejo 都没有可用的测试版管理器，本次改用正式版 Release"
                 CHANNEL_KIND="release"; PIN_MODE="pin"
                 echo "CHANNEL_KIND=$CHANNEL_KIND" >> "$GITHUB_ENV"
                 echo "PIN_MODE=$PIN_MODE" >> "$GITHUB_ENV"

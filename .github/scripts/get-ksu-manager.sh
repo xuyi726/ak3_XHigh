@@ -219,43 +219,71 @@ fi
 # ---------- 最新通道：官方 CI 构建的管理器（BakaSU / FinaSU） ----------
 # SukiSU-Nova 在上面单独处理（上游 Forgejo 的 Actions 产物）；这里只处理仍托管在
 # GitHub 的两种变体，直接取官方 CI 产出的管理器包，并按该构建提交锁定内核。
-# ---------- SukiSU-Nova 最新通道：上游 Forgejo 的 Manager 产物 ----------
-# 上游的滚动测试包只镜像到 cnb.cool（下载需登录），能匿名取到的最新测试管理器是
-# Forgejo Actions 里的 sukisu-manager 产物（APK 名自带 versionCode）。取其中最新
-# 未过期的一个，并按它的构建提交锁定内核，保证版本同源。
+# ---------- SukiSU-Nova 最新通道：cnb.cool 滚动测试包 / 上游 Forgejo 产物 ----------
+# cnb.cool 上的滚动测试包不是 Release 附件：sukisu-nova/Release 是一个仓库，
+# manager-ci 分支里放 manifest.json（版本、构建提交、资产列表）与 apks/（各 ABI 的
+# APK）。该仓库公开，raw 地址匿名可读，所以最新通道不再依赖令牌；配置了 CNB_TOKEN
+# 就一并带上，便于上游以后收紧权限。取不到再退回 Forgejo 上未过期的产物。
 if [ "$VARIANT" = "SukiSU-Nova" ] && [ "${PIN_MODE:-pin}" = "head" ]; then
-  # 优先 cnb.cool 的 manager-ci：滚动测试包只在那里保持最新（版本号取 APK 文件名）
-  if [ -n "${CNB_TOKEN:-}" ]; then
-    CNB_REL=$(curl -s --fail --max-time 30 \
-      -H "Authorization: Bearer $CNB_TOKEN" \
-      -H "Accept: application/vnd.cnb.api+json" \
-      "https://api.cnb.cool/sukisu-nova/Release/-/releases/tags/manager-ci" 2>/dev/null || true)
-    CNB_ROW=$(printf '%s' "$CNB_REL" | jq -r '
+  CNB_WEB="https://cnb.cool/sukisu-nova/Release/-/git/raw/manager-ci"
+  CNB_API="https://api.cnb.cool/sukisu-nova/Release/-/git/raw/manager-ci"
+  cnb_get() {  # $1=相对路径 $2=超时秒数
+    local rel="$1" timeout="${2:-60}"
+    if [ -n "${CNB_TOKEN:-}" ]; then
+      curl -s --fail --max-time "$timeout" -H "Authorization: Bearer $CNB_TOKEN" "$CNB_WEB/$rel" && return 0
+      curl -s --fail --max-time "$timeout" -H "Authorization: Bearer $CNB_TOKEN" \
+        -H "Accept: application/vnd.cnb.api+json" "$CNB_API/$rel"
+    else
+      curl -s --fail --max-time "$timeout" "$CNB_WEB/$rel"
+    fi
+  }
+  cnb_download() {  # $1=manifest 给出的绝对地址 $2=输出文件
+    if [ -n "${CNB_TOKEN:-}" ]; then
+      curl -sL --fail --retry 2 --max-time 600 -H "Authorization: Bearer $CNB_TOKEN" -o "$2" "$1" && return 0
+    else
+      curl -sL --fail --retry 2 --max-time 600 -o "$2" "$1" && return 0
+    fi
+    # 绝对地址打不开时按文件名走仓库 raw 地址
+    cnb_get "apks/$(basename "$1")" 600 > "$2"
+  }
+
+  CNB_MANIFEST=$(cnb_get manifest.json 30 2>/dev/null || true)
+  if [ -n "$CNB_MANIFEST" ]; then
+    CNB_ASSET=$(printf '%s' "$CNB_MANIFEST" | jq -r '
         [ .assets[]? | select(.name | test("\\.apk$"; "i"))
                       | select(.name | test("(?i)debug|spoofed") | not) ]
         | sort_by( if (.name | test("(?i)universal")) then 0
                    elif (.name | test("(?i)arm64")) then 1
                    else 2 end )
         | .[0]
-        | if . then [ .name, (.url // .browser_download_url), (.browser_download_url // "") ] | @tsv
+        | if . then [ .name, (.browser_download_url // "") ] | @tsv
           else empty end' 2>/dev/null || true)
-    if [ -n "$CNB_ROW" ]; then
-      IFS=$'\t' read -r CNB_NAME CNB_URL CNB_WEB <<< "$CNB_ROW"
+    if [ -n "$CNB_ASSET" ]; then
+      IFS=$'\t' read -r CNB_NAME CNB_URL <<< "$CNB_ASSET"
+      CNB_APK="manager-artifacts/$(basename "$CNB_NAME")"
       echo "从 cnb 下载测试版管理器: $CNB_NAME"
       rm -rf manager-artifacts
       mkdir -p manager-artifacts
-      if curl -sL --fail --retry 3 --max-time 600 -H "Authorization: Bearer $CNB_TOKEN" \
-        -o "manager-artifacts/$(basename "$CNB_NAME")" "$CNB_URL"; then
+      if cnb_download "$CNB_URL" "$CNB_APK" 2>/dev/null && [ -s "$CNB_APK" ]; then
         CLEAN_NAME=$(basename "$CNB_NAME" | sed -E 's/-(arm64-v8a|armeabi-v7a|armv7|riscv64|x86_64|x86|universal)-release\.apk$/.apk/')
         MANAGER_VERSION=$(echo "$CLEAN_NAME" | grep -oE '_[0-9]+' | tail -n 1 | tr -d '_')
+        CNB_BODY=$(printf '%s' "$CNB_MANIFEST" | jq -r '.body // empty' 2>/dev/null || true)
+        CNB_SHA=$(printf '%s' "$CNB_BODY" | sed -n 's/^- Commit: `\([0-9a-fA-F]\{7,40\}\)`.*/\1/p' | head -n 1)
+        CNB_BRANCH=$(printf '%s' "$CNB_BODY" | sed -n 's/^- Branch: `\([^`]*\)`.*/\1/p' | head -n 1)
         if [[ "${MANAGER_VERSION:-}" =~ ^[0-9]+$ ]]; then
-          # cnb 的 Release 元数据带 target_commitish 时直接用它，省掉反解
-          PIN_SHA=""
-          CNB_SHA=$(printf '%s' "$CNB_REL" | jq -r '.target_commitish // empty' 2>/dev/null || true)
-          if [ -n "$CNB_SHA" ] && [ "$(ksu_version_of "$CNB_SHA" 2>/dev/null || true)" = "$MANAGER_VERSION" ]; then
-            PIN_SHA="$CNB_SHA"
+          if [ -n "$CNB_BRANCH" ] && [ "$CNB_BRANCH" != "$EXPECTED_BRANCH" ]; then
+            echo "::warning title=SukiSU-Nova 最新通道::cnb 测试包的构建分支是 $CNB_BRANCH（非 $EXPECTED_BRANCH），内核仍按该提交对齐"
           fi
-          [ -n "$PIN_SHA" ] || PIN_SHA=$(nova_version_commit "$MANAGER_VERSION" 80 || true)
+          # manifest 里直接写着构建提交：先核对版本，对不上再按提交数反解
+          PIN_SHA=""
+          if [ -n "$CNB_SHA" ]; then
+            git -C KernelSU cat-file -e "${CNB_SHA}^{commit}" 2>/dev/null \
+              || git -C KernelSU fetch -q origin "$CNB_SHA" 2>/dev/null || true
+            if [ "$(ksu_version_of "$CNB_SHA" 2>/dev/null || true)" = "$MANAGER_VERSION" ]; then
+              PIN_SHA="$CNB_SHA"
+            fi
+          fi
+          [ -n "$PIN_SHA" ] || PIN_SHA=$(nova_version_commit "$MANAGER_VERSION" || true)
           if [ -z "$PIN_SHA" ]; then
             echo "::warning title=SukiSU-Nova 最新通道::默认分支最近提交里没有版本 $MANAGER_VERSION，内核改为锁定 HEAD"
             PIN_SHA=$(git -C KernelSU rev-parse "origin/${EXPECTED_BRANCH}^{commit}" 2>/dev/null || true)
@@ -270,12 +298,14 @@ if [ "$VARIANT" = "SukiSU-Nova" ] && [ "${PIN_MODE:-pin}" = "head" ]; then
         fi
         echo "::warning::cnb 管理器文件名无法解析版本（$(basename "$CNB_NAME")），改用 Forgejo 产物"
       else
-        echo "::warning::从 cnb 下载管理器失败，改用 Forgejo 产物"
+        echo "::warning::从 cnb 下载管理器失败（$CNB_NAME），改用 Forgejo 产物"
       fi
+      rm -rf manager-artifacts
     else
-      echo "::warning::cnb 上没有 manager-ci 的 APK 资产（检查 CNB_TOKEN 是否有 repo-release:r 权限），改用 Forgejo 产物"
+      echo "::warning::cnb 的 manifest.json 里没有可用 APK，改用 Forgejo 产物"
     fi
-    rm -rf manager-artifacts
+  else
+    echo "::warning::无法读取 cnb 的 manager-ci manifest.json，改用 Forgejo 产物"
   fi
 
   ART_ROW=$(curl -s --fail --max-time 30 "$API_BASE/actions/artifacts?limit=50" 2>/dev/null | jq -r '
