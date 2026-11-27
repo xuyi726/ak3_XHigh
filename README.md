@@ -48,7 +48,6 @@ Built upon [AnyKernel3](https://github.com/osm0sis/AnyKernel3), this repository 
 |  Re-Kernel | Optional Re-Kernel driver integration |
 |  CVE-2026-43499 | Optional automatic application of the rtmutex fix |
 |  Droidspaces | Optional container support with NTSync kernel compatibility patch |
-|  Skip Incompatible | Optional: auto-skip incompatible or unusable features (except SUSFS and OnePlus 8 Elite/Gen5 support) instead of failing the build |
 
 ## 🚀 Usage
 
@@ -61,7 +60,7 @@ Built upon [AnyKernel3](https://github.com/osm0sis/AnyKernel3), this repository 
      - `正式 (Release)`: manager APK taken from the latest **stable** upstream Release (`prerelease=false`) and the kernel pinned to that release tag commit, so manager and kernel versions match exactly; when the upstream only ships rc/pre-releases (e.g. BakaSU), the newest official default-branch build is used and pinned instead
      - `最新 (HEAD)`: kernel pinned to the default-branch HEAD, and the manager is the newest build whose version matches HEAD (any branch; SukiSU-Nova / BakaSU use official CI builds, FinaSU uses the latest Release), so kernel and manager never drift apart
      - Both channels print the selected channel, pinned commit and manager version in the logs and the run summary
-   - Feature switches: `enable_susfs`, `use_zram`, `use_bbg`, `use_net_enhance`, `use_kpm`, `skip_incompatible`, etc.
+   - Feature switches: `enable_susfs`, `use_zram`, `use_bbg`, `use_net_enhance`, `use_kpm`, etc.
 4. Once the build finishes, download the **Artifacts** from the run page:
    - `AnyKernel3.zip` — flashable zip (recommended; flash via custom Recovery or KSU)
    - `boot.img` / `boot-gz.img` / `boot-lz4.img` — boot images for each compression format

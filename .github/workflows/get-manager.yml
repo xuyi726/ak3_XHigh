@@ -44,10 +44,6 @@ on:
         required: false
         type: boolean
         default: false
-      skip_incompatible:
-        required: false
-        type: boolean
-        default: false
       droidspaces:
         description: "Droidspaces 槽位（off/678/123/345）"
         required: false
@@ -508,7 +504,6 @@ jobs:
               echo "| Re-Kernel 驱动 | $(flag "${{ inputs.use_rekernel }}") |"
               echo "| KPM | $KPM_ROW |"
               echo "| \`CVE-2026-43499\` 修复 | $(flag "${{ inputs.cve_2026_43499_patch }}") |"
-              echo "| 兼容跳过 | $(flag "${{ inputs.skip_incompatible }}") |"
               echo "| 产物上传模式 | ${{ inputs.artifact_upload_mode }} |"
               echo "| 自定义版本名 | ${VER_ROW} |"
               echo "| 自定义构建时间 | ${TIME_ROW} |"
