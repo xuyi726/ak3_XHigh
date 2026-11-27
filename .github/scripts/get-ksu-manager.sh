@@ -19,6 +19,31 @@ case "$VARIANT" in
   *) echo "::error::未知变体: $VARIANT"; exit 1 ;;
 esac
 
+# ==================== 版本号计算 ====================
+# 内核实际版本由 KernelSU 源码里的公式决定（VERSION_BASE/OFFSET 与加减号会随
+# 上游发布调整），这里统一读源码求值，避免写死常量后与管理器 versionCode 错位。
+ksu_version_of() {
+  local ref="$1"
+  case "$VARIANT" in
+    SukiSU-Nova) bash "$(dirname "${BASH_SOURCE[0]}")/ksu-version.sh" KernelSU "$ref" ;;
+    BakaSU) echo $((30700 + $(git -C KernelSU rev-list --count "$ref"))) ;;
+    FinaSU) echo $((30000 + $(git -C KernelSU rev-list --count "$ref"))) ;;
+  esac
+}
+
+# 在 $1 之后（默认分支上）最多找 $3 笔提交，返回版本号等于 $2 的第一笔。
+# 用于管理器 APK 由 Release 标签之后若干提交构建的情况。
+match_version_commit() {
+  local from="$1" want="$2" limit="${3:-40}" sha
+  for sha in $(git -C KernelSU rev-list --reverse "${from}..origin/${EXPECTED_BRANCH}" 2>/dev/null | head -n "$limit"); do
+    if [ "$(ksu_version_of "$sha")" = "$want" ]; then
+      echo "$sha"
+      return 0
+    fi
+  done
+  return 1
+}
+
 # 通道兜底解析（选择步骤异常时仍能按输入判断）
 CHANNEL_KIND="${CHANNEL_KIND:-}"
 if [ -z "$CHANNEL_KIND" ]; then
@@ -40,25 +65,30 @@ if [ "${MANAGER_SOURCE:-ci}" = "release" ] && [ -n "${REL_APK_URL:-}" ]; then
     MANAGER_VERSION=$(echo "$CLEAN_NAME" | grep -oE '_[0-9]+' | tail -n 1 | tr -d '_')
     if [[ "${MANAGER_VERSION:-}" =~ ^[0-9]+$ ]]; then
       echo "Release 管理器版本: $MANAGER_VERSION（标签 $REL_TAG，提交 ${REL_COMMIT:0:8}）"
+
+      # 版本一致性：管理器 APK 可能由标签之后的提交构建（上游只在发布时才调整
+      # 版本常量），此时按源码公式在标签之后找版本号相同的那一笔，内核锁到它，
+      # 保证内核与管理器同源同版本。
+      REL_KSU_VERSION=$(ksu_version_of "$REL_COMMIT")
+      if [ "$MANAGER_VERSION" != "$REL_KSU_VERSION" ]; then
+        MATCHED=""
+        if [ "$VARIANT" = "SukiSU-Nova" ]; then
+          MATCHED=$(match_version_commit "$REL_COMMIT" "$MANAGER_VERSION" 40 || true)
+        fi
+        if [ -n "$MATCHED" ]; then
+          echo "标签 $REL_TAG 对应版本 $REL_KSU_VERSION，管理器版本 $MANAGER_VERSION 来自其后提交 ${MATCHED:0:8}，内核改锁该提交"
+          REL_COMMIT="$MATCHED"
+        else
+          echo "::warning::Release 管理器版本 $MANAGER_VERSION 与标签提交对应的 KSU 版本 $REL_KSU_VERSION 不一致"
+        fi
+      fi
+
       echo "MANAGER_VERSION=$MANAGER_VERSION" >> $GITHUB_ENV
       {
         echo "managerVer=$MANAGER_VERSION"
         echo "ksuCommit=$REL_COMMIT"
         echo "channelTag=$REL_TAG"
       } >> $GITHUB_OUTPUT
-
-      # 版本一致性自检：Release 标签提交对应的 KSU 版本应与管理器 versionCode 相同
-      REL_COUNT=$(git -C KernelSU rev-list --count "$REL_COMMIT" 2>/dev/null || echo "")
-      if [ -n "$REL_COUNT" ]; then
-        case "$VARIANT" in
-          SukiSU-Nova) REL_KSU_VERSION=$((30000 + REL_COUNT + 996)) ;;
-          BakaSU) REL_KSU_VERSION=$((30700 + REL_COUNT)) ;;
-          FinaSU) REL_KSU_VERSION=$((30000 + REL_COUNT)) ;;
-        esac
-        if [ "$MANAGER_VERSION" != "$REL_KSU_VERSION" ]; then
-          echo "::warning::Release 管理器版本 $MANAGER_VERSION 与标签提交对应的 KSU 版本 $REL_KSU_VERSION 不一致"
-        fi
-      fi
 
       if [ "$VARIANT" == "FinaSU" ]; then
         echo "从 Release 管理器 APK 提取签名证书..."
@@ -169,15 +199,6 @@ get_manager_artifacts() {
   fi
 }
 
-# 版本号与管理器 versionCode 同源（提交数 + 偏移），用于按版本挑选构建
-ksu_version_of() {
-  case "$1" in
-    SukiSU-Nova) echo $((30000 + $2 + 996)) ;;
-    BakaSU) echo $((30700 + $2)) ;;
-    FinaSU) echo $((30000 + $2)) ;;
-  esac
-}
-
 # 最新通道：先锁定默认分支 HEAD，再把管理器限定为「版本与该 HEAD 一致」的构建，
 # 避免出现内核 35249 / 管理器 35248 这种版本错位。
 # BakaSU/FinaSU 例外：不锁默认分支 HEAD，直接取 build-manager.yml 按创建时间
@@ -195,10 +216,7 @@ if [ "${PIN_MODE:-pin}" = "head" ] && [ "$LATEST_PICK_BUILD" = 0 ]; then
   fi
   if [ -n "$HEAD_SHA" ]; then
     git -C KernelSU cat-file -e "${HEAD_SHA}^{commit}" 2>/dev/null || git -C KernelSU fetch -q origin "$HEAD_SHA" 2>/dev/null || true
-    HEAD_COUNT=$(git -C KernelSU rev-list --count "$HEAD_SHA" 2>/dev/null || echo "")
-    if [ -n "$HEAD_COUNT" ]; then
-      HEAD_VERSION=$(ksu_version_of "$VARIANT" "$HEAD_COUNT")
-    fi
+    HEAD_VERSION=$(ksu_version_of "$HEAD_SHA" 2>/dev/null || true)
     echo "最新通道：$EXPECTED_BRANCH HEAD ${HEAD_SHA:0:8} 对应 KSU 版本 ${HEAD_VERSION:-未知}"
   else
     echo "::warning::无法解析 $EXPECTED_BRANCH HEAD，管理器按最新构建选择"
@@ -290,9 +308,7 @@ if [ "${PIN_MODE:-pin}" = "head" ] && [ -n "$HEAD_VERSION" ]; then
     git -C KernelSU cat-file -e "${CAND_SHA}^{commit}" 2>/dev/null \
       || git -C KernelSU fetch -q origin "$CAND_SHA" 2>/dev/null \
       || continue
-    CAND_COUNT=$(git -C KernelSU rev-list --count "$CAND_SHA" 2>/dev/null || echo "")
-    [ -n "$CAND_COUNT" ] || continue
-    if [ "$(ksu_version_of "$VARIANT" "$CAND_COUNT")" = "$HEAD_VERSION" ]; then
+    if [ "$(ksu_version_of "$CAND_SHA")" = "$HEAD_VERSION" ]; then
       PREF_SHA="$CAND_SHA"
       break
     fi
@@ -384,21 +400,11 @@ echo "选择 Manager 构建 $MANAGER_BUILD_ID ($MANAGER_BRANCH, ${MANAGER_HEAD_S
 # 内核提交锁定策略：
 #   正式 → 锁定该构建提交（版本与管理器严格一致）
 #   最新 → 锁定选择时刻的默认分支 HEAD（管理器已按该版本匹配，二者一致）
-PIN_COUNT=$(git -C KernelSU rev-list --count "$MANAGER_HEAD_SHA" 2>/dev/null || echo "")
-if [ -n "$PIN_COUNT" ]; then
-  case "$VARIANT" in
-    BakaSU) PINNED_KSU_VERSION=$((30700 + PIN_COUNT)) ;;
-    SukiSU-Nova) PINNED_KSU_VERSION=$((30000 + PIN_COUNT + 996)) ;;
-    FinaSU) PINNED_KSU_VERSION=$((30000 + PIN_COUNT)) ;;
-    *)      PINNED_KSU_VERSION="" ;;
-  esac
-  if [ -n "$PINNED_KSU_VERSION" ]; then
-    echo "管理器构建提交 ${MANAGER_HEAD_SHA:0:8} 对应 KSU 版本: $PINNED_KSU_VERSION"
-    if [ "$MANAGER_VERSION" != "$PINNED_KSU_VERSION" ]; then
-      echo "::warning::Manager 实测版本 $MANAGER_VERSION 与构建提交对应的 KSU 版本 $PINNED_KSU_VERSION 不一致"
-    fi
-  elif [ -n "${KSU_VERSION:-}" ] && [ "$MANAGER_VERSION" != "$KSU_VERSION" ]; then
-    echo "::warning::Manager 实测版本 $MANAGER_VERSION 与内核 KSU 版本 ${KSU_VERSION} 不一致"
+PINNED_KSU_VERSION=$(ksu_version_of "$MANAGER_HEAD_SHA" 2>/dev/null || true)
+if [ -n "$PINNED_KSU_VERSION" ]; then
+  echo "管理器构建提交 ${MANAGER_HEAD_SHA:0:8} 对应 KSU 版本: $PINNED_KSU_VERSION"
+  if [ "$MANAGER_VERSION" != "$PINNED_KSU_VERSION" ]; then
+    echo "::warning::Manager 实测版本 $MANAGER_VERSION 与构建提交对应的 KSU 版本 $PINNED_KSU_VERSION 不一致"
   fi
 elif [ -n "${KSU_VERSION:-}" ] && [ "$MANAGER_VERSION" != "$KSU_VERSION" ]; then
   echo "::warning::Manager 实测版本 $MANAGER_VERSION 与内核 KSU 版本 ${KSU_VERSION} 不一致（无法计算构建提交对应的版本）"
@@ -424,7 +430,7 @@ if [ "${PIN_MODE:-pin}" = "head" ] && [ -n "$HEAD_SHA" ] && [ "$LATEST_PICK_BUIL
   if [ -n "$HEAD_VERSION" ] && [ "$MANAGER_VERSION" != "$HEAD_VERSION" ]; then
     # 上游 CI 产物跟不上 HEAD 时，继续锁 HEAD 会让内核与管理器版本错位；
     # 改为锁定管理器构建提交，并明确告知落后 HEAD。
-    echo "::warning title=SukiSU-Nova 最新通道::最新 CI 管理器 $MANAGER_VERSION 落后于 $EXPECTED_BRANCH HEAD 版本 $HEAD_VERSION，本次改为锁定管理器构建提交 ${MANAGER_HEAD_SHA:0:8}"
+    echo "::warning title=SukiSU-Nova 最新通道::最新 CI 管理器 $MANAGER_VERSION 对应的构建早于 $EXPECTED_BRANCH HEAD（HEAD 版本 $HEAD_VERSION），本次锁定该构建提交 ${MANAGER_HEAD_SHA:0:8}"
     echo "最新通道：内核锁定管理器构建提交 ${MANAGER_HEAD_SHA:0:8}，管理器版本 $MANAGER_VERSION"
     echo "ksuCommit=$MANAGER_HEAD_SHA" >> $GITHUB_OUTPUT
   else

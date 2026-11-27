@@ -192,8 +192,8 @@ jobs:
           KSU_GIT_VERSION=$(git rev-list --count HEAD)
 
           if [ "${{ inputs.kernelsu_variant }}" == "SukiSU-Nova" ]; then
-            # 改名后内核/管理器均为 30000 + 提交数 + 996（main 分支）
-            KSU_VERSION=$((30000 + KSU_GIT_VERSION + 996))
+            # 版本公式随上游发布调整（VERSION_BASE/OFFSET 与加减号都会变），按源码求值
+            KSU_VERSION=$(bash "$GITHUB_WORKSPACE/.github/scripts/ksu-version.sh" . HEAD)
           elif [ "${{ inputs.kernelsu_variant }}" == "FinaSU" ]; then
             # FinaSU 内核 Kbuild 与管理器 build.gradle.kts 均以 30000 + git 提交数计算版本
             KSU_VERSION=$((30000 + KSU_GIT_VERSION))

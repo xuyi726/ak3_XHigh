@@ -418,26 +418,23 @@ jobs:
               sed -i -E "s|^(REPO_BRANCH[[:space:]]*[:?+]?=)[[:space:]]*main[[:space:]]*\$|\1 $KSU_PIN|" "$KSU_VERSION_SOURCE"
               grep -qE "^REPO_BRANCH[[:space:]]*[:?+]?=[[:space:]]*$KSU_PIN[[:space:]]*\$" "$KSU_VERSION_SOURCE" \
                 || { echo "::error::未能在 $KSU_VERSION_SOURCE 中对齐 REPO_BRANCH（上游结构可能已变化），无法对齐管理器版本"; exit 1; }
-              # 与内核侧算法一致（改名后 VERSION_BASE=30000）：main 为加 996，builtin 为减 4001
-              if [ "$SUKISU_NOVA_BRANCH" = "builtin" ]; then
-                KSU_PIN_VERSION=$((30000 + $(git rev-list --count "$KSU_PIN") - 4001))
-              else
-                KSU_PIN_VERSION=$((30000 + $(git rev-list --count "$KSU_PIN") + 996))
-              fi
+              # 版本公式随上游发布调整，按源码求值（main 在 kernel/Kbuild，builtin 在 kernel/Makefile）
+              KSU_PIN_VERSION=$(bash "$GITHUB_WORKSPACE/.github/scripts/ksu-version.sh" . "$KSU_PIN" "$KSU_VERSION_SOURCE" 2>/dev/null || echo "未知")
               echo "SukiSU-Nova 内核侧版本来源已对齐管理器构建提交 $KSU_PIN (KSU 版本 $KSU_PIN_VERSION)"
             fi
-            # 与 SukiSU-Nova 内核侧算法一致（改名后 VERSION_BASE=30000）：
-            # main 分支 kernel/Kbuild 为 30000 + 提交数 + 996；builtin 分支 kernel/Makefile 为 30000 + 提交数 - 4001
+            # 版本号与内核实际公式保持一致：取管理器构建提交，按该提交的
+            # kernel/Kbuild（builtin 为 kernel/Makefile）求值
             if [ -n "$KSU_PIN" ]; then
-              KSU_PIN_COUNT=$(git rev-list --count "$KSU_PIN")
+              KSU_VERSION_REF="$KSU_PIN"
             else
-              KSU_PIN_COUNT=$(git rev-list --count main)
+              KSU_VERSION_REF=main
             fi
             if [ "$SUKISU_NOVA_BRANCH" = "builtin" ]; then
-              KSU_VERSION=$(expr "$KSU_PIN_COUNT" + 30000 - 4001)
+              KSU_VERSION_FILE="kernel/Makefile"
             else
-              KSU_VERSION=$(expr "$KSU_PIN_COUNT" + 30000 + 996)
+              KSU_VERSION_FILE="kernel/Kbuild"
             fi
+            KSU_VERSION=$(bash "$GITHUB_WORKSPACE/.github/scripts/ksu-version.sh" . "$KSU_VERSION_REF" "$KSU_VERSION_FILE" 2>/dev/null || echo "未知")
             echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
             cd ..
             # 内核完整版本的 @<branch> 固定为品牌名（CI 检出非 main 分支时管理器显示 @xuyi）
