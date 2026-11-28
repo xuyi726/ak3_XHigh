@@ -490,10 +490,11 @@ jobs:
               fi
               curl -LSs "https://git.zako.shirkneko.top:20004/shirkneko/SukiSU/raw/branch/main/kernel/setup.sh" | bash $BRANCH
               # 内核侧 KSU 版本来源对齐官方最新上传 Manager 构建：
-              # 版本公式（VERSION_BASE/OFFSET 与加减号）随上游发布变化，
-              # 统一由 .github/scripts/ksu-version.sh 读源码求值（main 在
-              # kernel/Kbuild，builtin 在 kernel/Makefile）。将 REPO_BRANCH 改写为
-              # 官方构建提交，保证内核 KSU 版本与拉取的管理器安装包严格一致
+              # 版本公式（VERSION_BASE/OFFSET 与加减号）随上游发布变化，统一由
+              # .github/scripts/ksu-version.sh 读源码求值；版本块位置也随上游重构变动
+              # （2026-11 起 builtin 挪进 kernel/kbuild-config/version.mk）。按内容定位
+              # 版本块再把 REPO_BRANCH 改写为官方构建提交，保证内核 KSU 版本与拉取的
+              # 管理器安装包严格一致
               if [ -n "$KSU_COMMIT" ] && [ "$BRANCH" != "-s main" ] && [ "$BRANCH" != "-s builtin" ]; then
                 echo "SukiSU-Nova 使用自定义提交（$BRANCH），跳过管理器版本对齐"
               elif [ -n "$KSU_COMMIT" ]; then
@@ -505,12 +506,18 @@ jobs:
                   echo "::error::官方构建提交 $KSU_COMMIT 不在 KernelSU 仓库中，无法对齐版本来源"
                   exit 1
                 fi
-                if [ "$BRANCH" = "-s builtin" ]; then
-                  KSU_VERSION_SOURCE="KernelSU/kernel/Makefile"
-                else
-                  KSU_VERSION_SOURCE="KernelSU/kernel/Kbuild"
+                KSU_VERSION_SOURCE=""
+                for ksu_ver_cand in KernelSU/kernel/kbuild-config/version.mk KernelSU/kernel/Kbuild KernelSU/kernel/Makefile; do
+                  if [ -f "$ksu_ver_cand" ] && grep -qE '^REPO_BRANCH[[:space:]]*[:?+]?=' "$ksu_ver_cand"; then
+                    KSU_VERSION_SOURCE="$ksu_ver_cand"
+                    break
+                  fi
+                done
+                if [ -z "$KSU_VERSION_SOURCE" ]; then
+                  echo "::error::KernelSU 树里找不到定义 REPO_BRANCH 的版本块（kernel/kbuild-config/version.mk、kernel/Kbuild、kernel/Makefile 都不含）"
+                  exit 1
                 fi
-                if ! sed -i -E "s|^(REPO_BRANCH[[:space:]]*[:?+]?=)[[:space:]]*main[[:space:]]*\$|\1 $KSU_COMMIT|" "$KSU_VERSION_SOURCE"; then
+                if ! sed -i -E "s|^(REPO_BRANCH[[:space:]]*[:?+]?=).*$|\1 $KSU_COMMIT|" "$KSU_VERSION_SOURCE"; then
                   echo "::error::改写 $KSU_VERSION_SOURCE 的 REPO_BRANCH 失败，无法对齐管理器版本"
                   exit 1
                 fi
@@ -715,12 +722,9 @@ jobs:
             if [ -n "$KSU_COUNT" ]; then
               case "${{ inputs.ksu_variant }}" in
                 SukiSU-Nova)
-                  # 版本公式随上游发布调整（VERSION_BASE/OFFSET 与加减号都会变），
-                  # 统一按源码求值：main 在 kernel/Kbuild，builtin 在 kernel/Makefile
+                  # 版本公式与版本块位置都随上游调整（2026-11 起进 kernel/kbuild-config/version.mk），
+                  # 统一交给 ksu-version.sh 按提交自行挑选版本块文件
                   KSU_VERSION_FILE="kernel/Kbuild"
-                  if [ "${BRANCH:-}" = "-s builtin" ]; then
-                    KSU_VERSION_FILE="kernel/Makefile"
-                  fi
                   KSU_VERSION=$(bash "$GITHUB_WORKSPACE/.github/scripts/ksu-version.sh" KernelSU "${{ inputs.ksu_commit }}" "$KSU_VERSION_FILE" 2>/dev/null || echo $((30000 + KSU_COUNT + 996)))
                   ;;
                 BakaSU) KSU_VERSION=$((30700 + KSU_COUNT)) ;;

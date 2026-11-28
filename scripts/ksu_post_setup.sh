@@ -26,12 +26,14 @@ apply_bakasu() {
 }
 
 apply_sukisu_nova() {
-  local kbuild=""
-  for f in "$KSU_DIR/kernel/Kbuild" "$KSU_DIR/kernel/Makefile"; do
-    if [ -f "$f" ]; then kbuild="$f"; break; fi
+  # 版本块位置随上游重构变动（2026-11 起在 kernel/kbuild-config/version.mk），
+  # 不能按「第一个存在的文件」猜，否则品牌后缀改不到使用点、静默失效
+  local pat f kbuild=""
+  pat=$(echo "${PATTERNS[sukisu_nova_branch]}" | base64 -d)
+  for f in "$KSU_DIR/kernel/kbuild-config/version.mk" "$KSU_DIR/kernel/Kbuild" "$KSU_DIR/kernel/Makefile"; do
+    if [ -f "$f" ] && grep -qF "$pat" "$f"; then kbuild="$f"; break; fi
   done
   if [ -n "$kbuild" ]; then
-    local pat=$(echo "${PATTERNS[sukisu_nova_branch]}" | base64 -d)
     sed -i "s/${pat}/@${BRAND}/" "$kbuild"
     local rel="${kbuild#${KSU_DIR}/}"
     git -C "$KSU_DIR" update-index --skip-worktree "$rel"

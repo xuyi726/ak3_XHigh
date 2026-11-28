@@ -416,8 +416,20 @@ jobs:
             fi
             curl -LSs "https://git.zako.shirkneko.top:20004/shirkneko/SukiSU/raw/branch/main/kernel/setup.sh" | bash -s "$SUKISU_NOVA_BRANCH"
             cd ./KernelSU
+            # 版本块位置随上游重构变动：2026-11 起 builtin 把 REPO_BRANCH/VERSION_BASE 挪进了
+            # kernel/kbuild-config/version.mk（kernel/Kbuild 只 include 它，kernel/Makefile 只剩
+            # 手动构建目标），再按「builtin → kernel/Makefile」猜路径会整步失败。改为按内容找。
+            KSU_VERSION_FILE=""
+            for ksu_ver_cand in kernel/kbuild-config/version.mk kernel/Kbuild kernel/Makefile; do
+              if [ -f "$ksu_ver_cand" ] && grep -qE '^REPO_BRANCH[[:space:]]*[:?+]?=' "$ksu_ver_cand"; then
+                KSU_VERSION_FILE="$ksu_ver_cand"
+                break
+              fi
+            done
+            [ -n "$KSU_VERSION_FILE" ] \
+              || { echo "::error::KernelSU 树里找不到定义 REPO_BRANCH 的版本块（kernel/kbuild-config/version.mk、kernel/Kbuild、kernel/Makefile 都不含）"; exit 1; }
             # 对齐 get-manager 选定的提交：SukiSU-Nova 的 builtin 分支与 main 内容不同，不能直接检出，
-            # 改为把内核侧版本来源 REPO_BRANCH 改写为该提交（main 在 kernel/Kbuild，builtin 在 kernel/Makefile）
+            # 改为把内核侧版本来源 REPO_BRANCH 改写为该提交
             if [ -n "$KSU_PIN" ]; then
               if ! git fetch -q origin "$KSU_PIN" 2>/dev/null; then
                 # 上游 Forgejo 不允许按未取到的 SHA 直接 fetch，整仓补一次分支与标签
@@ -427,29 +439,18 @@ jobs:
                 echo "::error::管理器构建提交 $KSU_PIN 不在 KernelSU 仓库中，无法对齐版本来源"
                 exit 1
               fi
-              if [ "$SUKISU_NOVA_BRANCH" = "builtin" ]; then
-                KSU_VERSION_SOURCE="kernel/Makefile"
-              else
-                KSU_VERSION_SOURCE="kernel/Kbuild"
-              fi
-              sed -i -E "s|^(REPO_BRANCH[[:space:]]*[:?+]?=)[[:space:]]*main[[:space:]]*\$|\1 $KSU_PIN|" "$KSU_VERSION_SOURCE"
-              grep -qE "^REPO_BRANCH[[:space:]]*[:?+]?=[[:space:]]*$KSU_PIN[[:space:]]*\$" "$KSU_VERSION_SOURCE" \
-                || { echo "::error::未能在 $KSU_VERSION_SOURCE 中对齐 REPO_BRANCH（上游结构可能已变化），无法对齐管理器版本"; exit 1; }
-              # 版本公式随上游发布调整，按源码求值（main 在 kernel/Kbuild，builtin 在 kernel/Makefile）
-              KSU_PIN_VERSION=$(bash "$KSU_VERSION_SCRIPT" . "$KSU_PIN" "$KSU_VERSION_SOURCE" 2>/dev/null || echo "未知")
+              sed -i -E "s|^(REPO_BRANCH[[:space:]]*[:?+]?=).*$|\1 $KSU_PIN|" "$KSU_VERSION_FILE"
+              grep -qE "^REPO_BRANCH[[:space:]]*[:?+]?=[[:space:]]*$KSU_PIN[[:space:]]*\$" "$KSU_VERSION_FILE" \
+                || { echo "::error::未能在 $KSU_VERSION_FILE 中对齐 REPO_BRANCH（上游结构可能已变化），无法对齐管理器版本"; exit 1; }
+              # 版本公式随上游发布调整，按源码求值（ksu-version.sh 会按提交自动挑版本块文件）
+              KSU_PIN_VERSION=$(bash "$KSU_VERSION_SCRIPT" . "$KSU_PIN" "$KSU_VERSION_FILE" 2>/dev/null || echo "未知")
               echo "SukiSU-Nova 内核侧版本来源已对齐管理器构建提交 $KSU_PIN (KSU 版本 $KSU_PIN_VERSION)"
             fi
-            # 版本号与内核实际公式保持一致：取管理器构建提交，按该提交的
-            # kernel/Kbuild（builtin 为 kernel/Makefile）求值
+            # 版本号与内核实际公式保持一致：取管理器构建提交，按该提交的版本块求值
             if [ -n "$KSU_PIN" ]; then
               KSU_VERSION_REF="$KSU_PIN"
             else
               KSU_VERSION_REF=main
-            fi
-            if [ "$SUKISU_NOVA_BRANCH" = "builtin" ]; then
-              KSU_VERSION_FILE="kernel/Makefile"
-            else
-              KSU_VERSION_FILE="kernel/Kbuild"
             fi
             KSU_VERSION=$(bash "$KSU_VERSION_SCRIPT" . "$KSU_VERSION_REF" "$KSU_VERSION_FILE" 2>/dev/null || echo "未知")
             echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV

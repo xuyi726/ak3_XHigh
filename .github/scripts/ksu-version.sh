@@ -20,9 +20,11 @@ KSU_DIR="${1:?需要 KernelSU 目录}"
 REF="${2:?需要提交或分支}"
 VERSION_FILE="${3:-kernel/Kbuild}"
 
-# 取含版本公式的源文件：优先调用方指定的路径，其次两个已知位置
+# 取含版本公式的源文件：优先调用方指定的路径，其次已知的版本块位置
+# （上游 2026-11 起把 REPO_BRANCH/VERSION_BASE 挪进 kernel/kbuild-config/version.mk，
+#  kernel/Kbuild 只 include 它、kernel/Makefile 只剩手动构建目标）
 SOURCE=""
-for CAND in "$VERSION_FILE" kernel/Kbuild kernel/Makefile; do
+for CAND in "$VERSION_FILE" kernel/kbuild-config/version.mk kernel/Kbuild kernel/Makefile; do
   TEXT=$(git -C "$KSU_DIR" show "$REF:$CAND" 2>/dev/null) || continue
   if printf '%s\n' "$TEXT" | grep -q '^VERSION_BASE'; then
     SOURCE="$TEXT"

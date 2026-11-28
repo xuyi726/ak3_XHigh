@@ -153,8 +153,8 @@ sukisu_nova_cb_mutex_compat() {
       # 上游这套守卫靠构建系统探测目标内核头文件来定义宏；探测一旦没了，
       # 6.11 以前的内核会静默丢掉 cb_mutex（能编过，只是 KPM 少一个成员）。
       if grep -q 'KSU_NETLINK_CFG_HAS_CB_MUTEX' "$f" \
-        && ! grep -Rqs -- '-DKSU_NETLINK_CFG_HAS_CB_MUTEX' "$ksu/kernel/Kbuild" "$ksu/kernel/Makefile" 2>/dev/null; then
-        echo "::warning title=cb_mutex 守卫宏无人定义::$rel 用 KSU_NETLINK_CFG_HAS_CB_MUTEX 守卫，但 kernel/Kbuild 与 kernel/Makefile 里都没有 -D 该宏，特性会被静默编掉（构建不中断）"
+        && ! grep -Rqs -- '-DKSU_NETLINK_CFG_HAS_CB_MUTEX' "$ksu/kernel/Kbuild" "$ksu/kernel/Makefile" "$ksu/kernel/kbuild-config" 2>/dev/null; then
+        echo "::warning title=cb_mutex 守卫宏无人定义::$rel 用 KSU_NETLINK_CFG_HAS_CB_MUTEX 守卫，但 kernel/Kbuild、kernel/Makefile、kernel/kbuild-config 里都没有 -D 该宏，特性会被静默编掉（构建不中断）"
       fi
       return 0
       ;;
